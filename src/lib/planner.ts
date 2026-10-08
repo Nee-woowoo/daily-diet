@@ -1,5 +1,17 @@
+import { isExcluded } from './advice';
+import { contradictsPreferences, isCalciumRich, isHighOil, isProteinRich } from './diet';
+import { bodyTagOf } from './members';
 import { RECIPES } from './recipes';
-import type { DayPlan, FridgeItem, Goal, Ingredient, Preference, Profile, Recipe } from './types';
+import type {
+  DayPlan,
+  FridgeItem,
+  Goal,
+  Ingredient,
+  Member,
+  Preference,
+  Profile,
+  Recipe,
+} from './types';
 
 /**
  * Fridge names that stand in for an ingredient written differently on the recipe side.
@@ -13,6 +25,7 @@ const ALIASES: Record<string, string[]> = {
   鸡胸肉: ['鸡胸', '鸡脯肉'],
   鸡腿肉: ['鸡腿', '琵琶腿'],
   鲜虾: ['虾', '大虾', '基围虾', '虾仁'],
+  三文鱼: ['鲑鱼', '刺身'],
   嫩豆腐: ['豆腐', '内酯豆腐', '南豆腐'],
   猪肉末: ['肉末', '猪绞肉', '猪肉馅'],
   挂面: ['面条', '龙须面', '细面'],
@@ -38,11 +51,6 @@ const ALIASES: Record<string, string[]> = {
   牛奶: ['纯牛奶', '鲜牛奶'],
 };
 
-/** Above this amount of cooking oil a dish stops counting as 清淡. */
-const OIL_LIMIT_ML = 18;
-/** Sugar or honey at or above this amount makes a dish non-低糖. */
-const SWEET_LIMIT_G = 5;
-const SWEETENER = /糖|蜂蜜/;
 /** How many top-ranked dishes 「重新生成」 draws from, so the menu varies but stays sensible. */
 const PICK_SPREAD = 3;
 
@@ -53,7 +61,8 @@ const WEIGHTS = {
   allReady: 3,
   /** Per missing main ingredient. */
   missing: 0.6,
-  goal: 2,
+  /** How well the dish fits the household's members. See `memberFit`. */
+  member: 2,
   preference: 0.8,
   /** 清淡 / 低糖 preference contradicted by the recipe itself. */
   conflict: 1.5,
@@ -140,14 +149,17 @@ function isVegetarianFriendly(recipe: Recipe): boolean {
   return !hasMeat(recipe);
 }
 
-/** 素食 drops meat and seafood dishes; if that would leave nothing, the filter is relaxed. */
+/**
+ * 素食 drops meat and seafood dishes; if that would leave nothing, the filter is relaxed — but only
+ * back to the pool it was handed, which is already the safety-filtered one (see `applyMemberFilter`).
+ */
 function applyPreferenceFilter(pool: Recipe[], profile: Profile): Recipe[] {
   if (!profile.preferences.includes('vegetarian')) return pool;
   const allowed = pool.filter(isVegetarianFriendly);
   return allowed.length > 0 ? allowed : pool;
 }
 
-/** Rough affinity of a dish with the user's body goal, in the range -2…2. */
+/** Rough affinity of a dish with one body goal, in the range -2.5…2. */
 function goalFit(recipe: Recipe, goal: Goal): number {
   switch (goal) {
     case 'fatLoss': {
@@ -166,6 +178,51 @@ function goalFit(recipe: Recipe, goal: Goal): number {
   }
 }
 
+/**
+ * One member's affinity for a dish: the body goal everyone has, plus what their special states ask
+ * for. `age: 0` (未填) and members with no tags beyond 均衡 simply score 0 — but their 份数 and their
+ * exclusions still apply.
+ */
+function memberTagFit(recipe: Recipe, member: Member): number {
+  let score = goalFit(recipe, bodyTagOf(member));
+  if (member.special.includes('pregnancy')) {
+    if (isProteinRich(recipe)) score += 1;
+    if (recipe.oilLevel === 'low') score += 0.5;
+  }
+  if (member.special.includes('growingChild')) {
+    if (isProteinRich(recipe)) score += 1.5;
+    else if (recipe.protein >= 20) score += 0.5;
+    if (isCalciumRich(recipe)) score += 1;
+  }
+  if (member.special.includes('seniorLight')) {
+    if (recipe.oilLevel === 'low') score += 1;
+    if (isHighOil(recipe)) score -= 1.5;
+    if (recipe.spice === 'mild') score -= 0.5;
+  }
+  return score;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * The household's average affinity — one member, one vote, and the average is over ALL members, so a
+ * 均衡 member still counts in the denominator.
+ *
+ * Each member is clamped to `goalFit`'s own range before averaging: without it 增肌 (2) + 发育期儿童
+ * (1.5 + 1) would reach 4.5, × `WEIGHTS.member` = 9, and swamp the fridge terms (3 + 3) that should
+ * dominate. A household of one member carrying only a body tag therefore scores exactly `goalFit`.
+ */
+function memberFit(recipe: Recipe, profile: Profile): number {
+  if (profile.members.length === 0) return goalFit(recipe, 'balanced');
+  const total = profile.members.reduce(
+    (sum, member) => sum + clamp(memberTagFit(recipe, member), -2.5, 2),
+    0,
+  );
+  return total / profile.members.length;
+}
+
 function preferenceFit(recipe: Recipe, preferences: Preference[]): number {
   // 素食 is handled as a filter, so it is not scored again here.
   return preferences.filter(
@@ -173,27 +230,14 @@ function preferenceFit(recipe: Recipe, preferences: Preference[]): number {
   ).length;
 }
 
-function contradictsPreferences(recipe: Recipe, preferences: Preference[]): boolean {
-  if (preferences.includes('light')) {
-    if (recipe.oilLevel === 'high') return true;
-    if (
-      recipe.seasonings.some(
-        (item) => !item.optional && item.name === '食用油' && item.amount >= OIL_LIMIT_ML,
-      )
-    ) {
-      return true;
-    }
-  }
-  if (preferences.includes('lowSugar')) {
-    if (
-      recipe.seasonings.some(
-        (item) => !item.optional && SWEETENER.test(item.name) && item.amount >= SWEET_LIMIT_G,
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
+/**
+ * 家里有人忌口就整道排除 —— 孕期生食、幼儿重辣。
+ *
+ * 安全规则没有「排空就松弛」这一说：`applyPreferenceFilter` 可以把空池子退回给它，但禁忌永远不松。
+ * 宁可候选变少，也不能把孕妈不能吃的菜端上桌。
+ */
+function applyMemberFilter(pool: Recipe[], profile: Profile): Recipe[] {
+  return pool.filter((recipe) => !isExcluded(recipe, profile));
 }
 
 export interface ScoreOptions {
@@ -211,7 +255,7 @@ export function scoreRecipe(
   let score = match.ratio * WEIGHTS.readyRatio;
   if (match.missing.length === 0) score += WEIGHTS.allReady;
   score -= match.missing.length * WEIGHTS.missing;
-  score += goalFit(recipe, profile.goal) * WEIGHTS.goal;
+  score += memberFit(recipe, profile) * WEIGHTS.member;
   score += preferenceFit(recipe, profile.preferences) * WEIGHTS.preference;
   if (contradictsPreferences(recipe, profile.preferences)) score -= WEIGHTS.conflict;
   if (options.avoid?.has(recipe.id)) score -= WEIGHTS.repeat;
@@ -227,7 +271,8 @@ export function rankRecipes(
   options: ScoreOptions = {},
 ): RankedRecipe[] {
   const available = availableNames(fridge);
-  return applyPreferenceFilter(pool, profile)
+  // 先安全、后偏好：偏好可以松弛，禁忌不行。
+  return applyPreferenceFilter(applyMemberFilter(pool, profile), profile)
     .map((recipe) => {
       const match = matchAgainst(recipe, available);
       return { recipe, match, score: scoreRecipe(recipe, match, profile, options) };
@@ -252,6 +297,16 @@ function pickMeal(
   const candidates = ranked.slice(0, PICK_SPREAD);
   if (candidates.length === 0) return undefined;
   return candidates[Math.floor(Math.random() * candidates.length)].recipe;
+}
+
+/**
+ * 连一道菜都挑不出来时的兜底（正常情况下走不到：三档每档都有好几道）。
+ *
+ * 旧写法是 `RECIPES[0]`，那会把**被排除的菜**端上桌 —— 生食菜出现在孕妇的菜单里比空着更糟，
+ * 所以兜底也过一遍安全过滤；只有整库都被排除时才会退回第一道。
+ */
+function safeFallback(profile: Profile): Recipe {
+  return RECIPES.find((recipe) => !isExcluded(recipe, profile)) ?? RECIPES[0];
 }
 
 /** Builds a breakfast / lunch / dinner plan for today, preferring what the fridge already holds. */
@@ -294,13 +349,15 @@ export function generatePlan(
     },
   );
 
-  // Each pool has more entries than meals per day, so the fallbacks are only defensive.
+  // Each pool has more entries than meals per day, so the fallbacks are only defensive — but they
+  // still go through the safety filter, never straight to `RECIPES`.
+  const fallback = safeFallback(profile);
   return {
     date: todayKey(),
     meals: {
-      breakfast: (breakfast ?? lunch ?? dinner ?? RECIPES[0]).id,
-      lunch: (lunch ?? dinner ?? breakfast ?? RECIPES[0]).id,
-      dinner: (dinner ?? lunch ?? breakfast ?? RECIPES[0]).id,
+      breakfast: (breakfast ?? lunch ?? dinner ?? fallback).id,
+      lunch: (lunch ?? dinner ?? breakfast ?? fallback).id,
+      dinner: (dinner ?? lunch ?? breakfast ?? fallback).id,
     },
     generatedAt: Date.now(),
   };

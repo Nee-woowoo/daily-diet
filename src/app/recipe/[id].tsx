@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Tag, TagRow } from '@/components/ui/tag';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { cautions, exclusionLabels, exclusionReasons } from '@/lib/advice';
 import {
   formatAmount,
   GOAL_LABELS,
@@ -15,9 +16,12 @@ import {
   OIL_LEVEL_LABELS,
   PREFERENCE_LABELS,
   PREFERENCE_TONES,
+  SPICE_LABELS,
 } from '@/lib/labels';
+import { householdPortions, memberSummaryLabel, portionLabel } from '@/lib/members';
 import { matchRecipe } from '@/lib/planner';
 import { getRecipe, scaleAmount } from '@/lib/recipes';
+import { stapleAmountLabel, stapleSuggestion } from '@/lib/staples';
 import { useAppStore } from '@/lib/storage';
 import type { Ingredient } from '@/lib/types';
 
@@ -41,7 +45,14 @@ export default function RecipeDetailScreen() {
 
   const match = matchRecipe(recipe, fridge);
   const ready = match.missing.length === 0;
-  const seasoningsNote = `1 勺 ≈ 15 毫升，用量按 ${profile.servings} 人份换算`;
+  // 全家份数：每位成员按年龄档各占一份（成人 1、儿童 0.5、长辈 0.8），食材克数是它乘出来的。
+  const portions = householdPortions(profile);
+  const portionsLabel = formatAmount(portions, '人份');
+  const seasoningsNote = `1 勺 ≈ 15 毫升，用量按 ${portionsLabel}换算`;
+  // 另配主食（`recipe.staple`）才在这里出现：早餐的主食是菜自己的配料，已经列在食材清单里了。
+  const staple = recipe.staple ? stapleSuggestion(recipe, profile) : undefined;
+  const cautionList = cautions(recipe, profile);
+  const excludedLabels = exclusionLabels(recipe, profile);
 
   return (
     <>
@@ -60,6 +71,10 @@ export default function RecipeDetailScreen() {
               label={OIL_LEVEL_LABELS[recipe.oilLevel]}
               tone={recipe.oilLevel === 'low' ? 'ready' : 'neutral'}
             />
+            <Tag
+              label={SPICE_LABELS[recipe.spice]}
+              tone={recipe.spice === 'none' ? 'neutral' : 'spicy'}
+            />
           </TagRow>
           <TagRow>
             {recipe.goals.map((goal) => (
@@ -75,9 +90,21 @@ export default function RecipeDetailScreen() {
           </TagRow>
           <ThemedText type="caption" themeColor="textSecondary">
             适合{recipe.slots.map((slot) => MEAL_SLOT_LABELS[slot]).join(' / ')} · 用量按{' '}
-            {profile.servings} 人份计算
+            {portionsLabel}计算
           </ThemedText>
         </Card>
+
+        {excludedLabels.length > 0 ? (
+          <Card>
+            <View style={styles.matchHeader}>
+              <ThemedText type="headline">已从菜单里排除</ThemedText>
+              <Tag label={excludedLabels.join('、')} tone="unsafe" />
+            </View>
+            <ThemedText type="caption" themeColor="textSecondary">
+              {exclusionReasons(recipe, profile).join('；')}。要改的话去「录入」调整成员或状态。
+            </ThemedText>
+          </Card>
+        ) : null}
 
         <Card>
           <View style={styles.matchHeader}>
@@ -104,18 +131,56 @@ export default function RecipeDetailScreen() {
         </Card>
 
         <View style={styles.section}>
-          <SectionTitle>{`食材清单 · ${profile.servings} 人份`}</SectionTitle>
+          <SectionTitle>{`食材清单 · 共 ${portionsLabel}`}</SectionTitle>
           <Card style={styles.listCard}>
             {recipe.ingredients.map((ingredient, index) => (
               <IngredientRow
                 key={ingredient.name}
                 ingredient={ingredient}
-                servings={profile.servings}
+                servings={portions}
                 divider={index > 0}
               />
             ))}
           </Card>
         </View>
+
+        {profile.members.length > 0 ? (
+          <View style={styles.section}>
+            <SectionTitle>每人份量</SectionTitle>
+            <Card style={styles.listCard}>
+              {profile.members.map((member, index) => (
+                <CardRow
+                  key={member.id}
+                  divider={index > 0}
+                  label={
+                    <ThemedText type="body">
+                      {member.name}（{memberSummaryLabel(member)}）
+                    </ThemedText>
+                  }
+                  value={
+                    <ThemedText type="body" themeColor="textSecondary">
+                      {portionLabel(member)}
+                    </ThemedText>
+                  }
+                />
+              ))}
+              {staple ? (
+                <CardRow
+                  label={<ThemedText type="body">主食 {staple.name}</ThemedText>}
+                  value={
+                    <ThemedText type="body" themeColor="textSecondary">
+                      {stapleAmountLabel(staple)}
+                    </ThemedText>
+                  }
+                />
+              ) : null}
+            </Card>
+            <ThemedText type="caption" themeColor="textSecondary" style={styles.note}>
+              份数是按年龄分的食量档：成人 1 份、儿童（未满 13 岁）0.5 份、长辈（60 岁起）0.8
+              份。上面的食材克数是全家合计，不再按人分开四舍五入，免得总数对不上。
+            </ThemedText>
+          </View>
+        ) : null}
 
         <View style={styles.section}>
           <SectionTitle>调味料</SectionTitle>
@@ -124,7 +189,7 @@ export default function RecipeDetailScreen() {
               <IngredientRow
                 key={ingredient.name}
                 ingredient={ingredient}
-                servings={profile.servings}
+                servings={portions}
                 divider={index > 0}
               />
             ))}
@@ -149,6 +214,19 @@ export default function RecipeDetailScreen() {
             ))}
           </Card>
         </View>
+
+        {cautionList.length > 0 ? (
+          <View style={styles.section}>
+            <SectionTitle>注意事项</SectionTitle>
+            <Card>
+              {cautionList.map((item) => (
+                <ThemedText key={`${item.name}-${item.tag}`} type="small" themeColor="textSecondary">
+                  {item.name}（{item.tag}）：{item.text}
+                </ThemedText>
+              ))}
+            </Card>
+          </View>
+        ) : null}
 
         {recipe.tip ? (
           <View style={styles.section}>

@@ -1,4 +1,5 @@
 import { MEAL_SLOTS, formatAmount } from './labels';
+import { householdPortions } from './members';
 import { missingIngredients, normalizeName } from './planner';
 import { getRecipe, scaleAmount } from './recipes';
 import type { DayPlan, FridgeItem, IngredientCategory, IngredientUnit, MealSlot, Profile } from './types';
@@ -84,7 +85,10 @@ export function buildShoppingList(
     name: draft.name,
     category: draft.category,
     amounts: [...draft.amounts].map(
-      ([unit, amount]): [IngredientUnit, number] => [unit, scaleAmount(amount, unit, profile.servings)],
+      ([unit, amount]): [IngredientUnit, number] => [
+        unit,
+        scaleAmount(amount, unit, householdPortions(profile)),
+      ],
     ),
     optional: draft.optional,
     usedIn: draft.slots.map((slot) => SLOT_SHORT[slot]).join('・'),

@@ -5,14 +5,22 @@ import type { IngredientUnit, Recipe, StapleServing } from './types';
  * so the plan is generated offline from what is actually in the fridge.
  *
  * Conventions:
- * - Ingredient amounts are for ONE serving; the UI multiplies them by `Profile.servings`.
+ * - Ingredient amounts are for ONE serving; the UI multiplies them by the household's total 份数
+ *   (`members.householdPortions`, where an adult is 1 份, a child 0.5 and a 长辈 0.8).
  * - Seasoning liquids are measured in 勺 (1 勺 ≈ 15 毫升), powders in 克, aromatics in 瓣/片/根.
+ * - Every dish declares `spice`. `'hot'` is a HARD exclusion for households with a 幼儿 — that rule
+ *   lives in `diet.SPICY_HARD_EXCLUDE_KEYS`, not in `exclusions`, so the two cannot disagree.
+ * - `exclusions` is for real taboos only (生食 / 酒精), never for taste — 口味 is the family-wide
+ *   `Profile.preferences`, which only down-weights. Anything milder goes in `cautions`.
+ * - `care` (今日页「兼顾说明」) and `cautions` (详情页「注意事项」) are keyed by member tag; `{name}` is
+ *   replaced with the member's 称呼. Hand-written text wins, and a missing entry falls back to a
+ *   template that is derived from the dish's own numbers (see `advice.ts`).
  * - `ingredients` are the main ingredients that drive fridge matching; `seasonings` are
  *   assumed to be pantry staples and never count as missing.
- * - `staple` is the 主食 a dish is served with, structured so the 今日 tab can scale it by servings
- *   and by 身体目标. 午/晚餐 must set it (their `pairing` is only a staple); 早餐 leaves it
- *   undefined because its staple is already one of `ingredients` (category: 'staple'), which also
- *   means its energy is inside `calories`.
+ * - `staple` is the 主食 a dish is served with, structured so the 今日 tab can scale it to the
+ *   household's 份数, each member's 身体目标 (`staples.stapleFactorSum`). 午/晚餐 must set it (their
+ *   `pairing` is only a staple); 早餐 leaves it undefined because its staple is already one of
+ *   `ingredients` (category: 'staple'), which also means its energy is inside `calories`.
  * - Never move a `staple` into `ingredients`: those drive fridge matching and the 采购清单, and a
  *   suggested bowl of rice must not count as a missing ingredient.
  */
@@ -34,6 +42,7 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'low',
     goals: ['fatLoss', 'balanced'],
     preferences: ['light', 'vegetarian', 'lowSugar'],
+    spice: 'none',
     ingredients: [
       { name: '小米', amount: 60, unit: 'g', category: 'staple' },
       { name: '南瓜', amount: 150, unit: 'g', category: 'veg' },
@@ -62,6 +71,7 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'medium',
     goals: ['balanced', 'muscleGain'],
     preferences: ['light'],
+    spice: 'none',
     ingredients: [
       { name: '番茄', amount: 200, unit: 'g', category: 'veg' },
       { name: '鸡蛋', amount: 2, unit: '个', category: 'egg' },
@@ -95,6 +105,9 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'low',
     goals: ['fatLoss', 'muscleGain'],
     preferences: ['light', 'lowSugar'],
+    spice: 'none',
+    // 溏心（步骤里那个「煮 6 分钟」）是孕妇唯一要改的地方，整道菜不必排除。
+    cautions: { pregnancy: '{name}要吃全熟蛋就别做溏心，煮够 7 分钟' },
     ingredients: [
       { name: '鸡蛋', amount: 2, unit: '个', category: 'egg' },
       { name: '全麦吐司', amount: 2, unit: '片', category: 'staple' },
@@ -125,6 +138,8 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'low',
     goals: ['muscleGain', 'balanced'],
     preferences: ['light'],
+    spice: 'none',
+    care: { growingChild: '有奶有钙，{name}长个子' },
     ingredients: [
       { name: '即食燕麦片', amount: 50, unit: 'g', category: 'staple' },
       { name: '牛奶', amount: 250, unit: 'ml', category: 'egg' },
@@ -153,6 +168,7 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'medium',
     goals: ['balanced', 'muscleGain'],
     preferences: ['light'],
+    spice: 'none',
     ingredients: [
       { name: '番茄', amount: 250, unit: 'g', category: 'veg' },
       { name: '鸡蛋', amount: 3, unit: '个', category: 'egg' },
@@ -185,6 +201,8 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'low',
     goals: ['fatLoss'],
     preferences: ['light', 'vegetarian', 'lowSugar'],
+    spice: 'none',
+    care: { growingChild: '西兰花含钙，{name}长身体正需要' },
     ingredients: [
       { name: '西兰花', amount: 300, unit: 'g', category: 'veg' },
       { name: '大蒜', amount: 2, unit: '瓣', category: 'veg' },
@@ -215,6 +233,7 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'low',
     goals: ['fatLoss'],
     preferences: ['light', 'vegetarian', 'lowSugar'],
+    spice: 'none',
     ingredients: [
       { name: '油麦菜', amount: 300, unit: 'g', category: 'veg' },
       { name: '大蒜', amount: 3, unit: '瓣', category: 'veg' },
@@ -245,6 +264,12 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'low',
     goals: ['fatLoss', 'muscleGain'],
     preferences: ['light', 'lowSugar'],
+    spice: 'none',
+    care: {
+      fatLoss: '{name}减脂的好主菜，少油煎、饱腹',
+      muscleGain: '蛋白质 45 克，{name}增肌刚好',
+      growingChild: '蛋白质 45 克，{name}长身体管够'
+    },
     ingredients: [
       { name: '鸡胸肉', amount: 200, unit: 'g', category: 'meat' },
       { name: '西兰花', amount: 150, unit: 'g', category: 'veg' },
@@ -279,6 +304,13 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'low',
     goals: ['fatLoss', 'muscleGain'],
     preferences: ['light', 'lowSugar'],
+    spice: 'none',
+    care: {
+      pregnancy: '{name}可以放心吃，虾低汞、煮到全熟就行',
+      growingChild: '高蛋白，{name}长身体正合适',
+      fatLoss: '白灼几乎不加油，{name}减脂能吃'
+    },
+    cautions: { toddler: '{name}那份要剥壳去虾线，切成小块' },
     ingredients: [
       { name: '鲜虾', amount: 250, unit: 'g', category: 'meat' },
       { name: '姜', amount: 3, unit: '片', category: 'veg' },
@@ -311,6 +343,7 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'medium',
     goals: ['balanced'],
     preferences: ['spicy'],
+    spice: 'hot',
     ingredients: [
       { name: '嫩豆腐', amount: 400, unit: 'g', category: 'veg' },
       { name: '猪肉末', amount: 80, unit: 'g', category: 'meat' },
@@ -348,6 +381,9 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'high',
     goals: ['muscleGain'],
     preferences: ['spicy'],
+    spice: 'hot',
+    // 重辣对幼儿的排除是派生出来的（`diet.SPICY_HARD_EXCLUDE_KEYS`），这里只写别的提醒。
+    cautions: { toddler: '花生米要碾碎，别整颗给{name}', seniorLight: '糖和油都偏高，{name}浅尝即可' },
     ingredients: [
       { name: '鸡腿肉', amount: 250, unit: 'g', category: 'meat' },
       { name: '花生米', amount: 40, unit: 'g', category: 'veg' },
@@ -388,6 +424,7 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'medium',
     goals: ['balanced'],
     preferences: ['spicy'],
+    spice: 'mild',
     ingredients: [
       { name: '土豆', amount: 250, unit: 'g', category: 'staple' },
       { name: '青椒', amount: 100, unit: 'g', category: 'veg' },
@@ -423,6 +460,7 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'medium',
     goals: ['muscleGain', 'balanced'],
     preferences: ['light'],
+    spice: 'none',
     ingredients: [
       { name: '鸡腿肉', amount: 250, unit: 'g', category: 'meat' },
       { name: '干香菇', amount: 30, unit: 'g', category: 'veg' },
@@ -459,6 +497,9 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'medium',
     goals: ['balanced'],
     preferences: ['light'],
+    spice: 'none',
+    care: { seniorLight: '炖得软烂，{name}好入口' },
+    cautions: { toddler: '排骨带骨，{name}那份先剔骨' },
     ingredients: [
       { name: '排骨', amount: 300, unit: 'g', category: 'meat' },
       { name: '冬瓜', amount: 300, unit: 'g', category: 'veg' },
@@ -492,6 +533,9 @@ export const RECIPES: Recipe[] = [
     oilLevel: 'low',
     goals: ['fatLoss'],
     preferences: ['light', 'vegetarian', 'lowSugar'],
+    spice: 'mild',
+    care: { fatLoss: '{name}减脂可以放开吃，几乎没热量' },
+    cautions: { toddler: '小米辣可以不放，{name}那份单拌' },
     ingredients: [
       { name: '黄瓜', amount: 250, unit: 'g', category: 'veg' },
       { name: '大蒜', amount: 3, unit: '瓣', category: 'veg' },
@@ -514,6 +558,45 @@ export const RECIPES: Recipe[] = [
     staple: MIXED_GRAIN_RICE,
     pairing: '配杂粮饭 1 小碗',
     tip: '先腌出水再拌，黄瓜才脆不出汤。',
+  },
+  {
+    id: 'sanwenyu-cishen',
+    name: '三文鱼刺身',
+    slots: ['lunch', 'dinner'],
+    minutes: 10,
+    calories: 210,
+    protein: 28,
+    oilLevel: 'low',
+    goals: ['fatLoss', 'muscleGain'],
+    preferences: ['light', 'lowSugar'],
+    spice: 'none',
+    // 唯一一道生食菜：孕期和幼儿都是硬排除，也是「有禁忌就整道排除」这条规则最好的示例。
+    exclusions: { pregnancy: '生食', toddler: '生食' },
+    cautions: { pregnancy: '生鱼片有寄生虫和细菌风险，{name}请改吃煎熟的三文鱼' },
+    care: {
+      fatLoss: '{name}减脂可以放心吃，完全不用油',
+      muscleGain: '蛋白质 28 克，{name}增肌够用'
+    },
+    ingredients: [
+      { name: '三文鱼', amount: 200, unit: 'g', category: 'meat' },
+      { name: '白萝卜', amount: 100, unit: 'g', category: 'veg' },
+      { name: '紫苏叶', amount: 4, unit: '片', category: 'veg', optional: true },
+    ],
+    seasonings: [
+      { name: '生抽', amount: 2, unit: '勺', category: 'seasoning' },
+      { name: '芥末', amount: 5, unit: 'g', category: 'seasoning', optional: true },
+      { name: '柠檬', amount: 2, unit: '片', category: 'seasoning', optional: true },
+    ],
+    steps: [
+      '三文鱼提前一天放冷藏室解冻，全程别用热水泡。',
+      '用厨房纸吸干表面水分，顺着纹理斜刀切成 5 毫米厚片。',
+      '白萝卜去皮切成细丝，泡冰水 5 分钟后沥干垫底。',
+      '鱼片摆盘，盖上保鲜膜冷藏 10 分钟再上桌。',
+      '生抽加芥末调成蘸碟，吃前挤几滴柠檬。',
+    ],
+    staple: WHITE_RICE,
+    pairing: '配白米饭 1 小碗',
+    tip: '一定要买标注「刺身级」的冷冻三文鱼，普通鲜鱼不推荐生吃。',
   },
 ];
 

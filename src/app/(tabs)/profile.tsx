@@ -2,26 +2,91 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { PrimaryButton } from '@/components/ui/button';
-import { Card, SectionTitle } from '@/components/ui/card';
+import { PlainButton, PrimaryButton, SoftButton } from '@/components/ui/button';
+import { Card, CardRow, SectionTitle } from '@/components/ui/card';
 import { Chip, OptionCard } from '@/components/ui/chip';
 import { Screen } from '@/components/ui/screen';
-import { Stepper } from '@/components/ui/stepper';
+import { Sheet } from '@/components/ui/sheet';
 import { TagRow } from '@/components/ui/tag';
+import { TextField } from '@/components/ui/text-field';
 import { Spacing } from '@/constants/theme';
-import { GOAL_DESCRIPTIONS, GOAL_LABELS, PREFERENCE_LABELS } from '@/lib/labels';
+import { GOAL_DESCRIPTIONS, GOAL_LABELS, PREFERENCE_LABELS, formatAmount } from '@/lib/labels';
+import {
+  DEFAULT_MEMBER,
+  SPECIAL_TAGS,
+  SPECIAL_TAG_HINTS,
+  SPECIAL_TAG_LABELS,
+  createMemberId,
+  householdLabel,
+  householdPortions,
+  memberSummaryLabel,
+  needsMigrationCheck,
+  portionLabel,
+} from '@/lib/members';
 import { useAppStore } from '@/lib/storage';
-import type { Goal, Preference } from '@/lib/types';
+import type { Goal, Member, Preference, SpecialTag } from '@/lib/types';
 
 const GOALS: Goal[] = ['fatLoss', 'muscleGain', 'balanced'];
 const PREFERENCES: Preference[] = ['light', 'spicy', 'vegetarian', 'lowSugar'];
+/** 年龄输入的上限；`age: 0` 表示「没填」，引擎按成人 1 份算。 */
+const AGE_MAX = 120;
 
 export default function ProfileScreen() {
   const { profile, saveProfile } = useAppStore();
-  const [servings, setServings] = useState(profile.servings);
-  const [goal, setGoal] = useState<Goal>(profile.goal);
+  const [members, setMembers] = useState<Member[]>(profile.members);
   const [preferences, setPreferences] = useState<Preference[]>(profile.preferences);
+  /**
+   * 正在编辑的成员草稿，`null` = 表单关着。
+   *
+   * 草稿属于**页面**而不是 Sheet：iOS 上 RN `Modal` 的 children 首次打开之后不再卸载
+   * （`_shouldShowModal` 依赖 legacy 的 `modalDismissed` 事件），所以 Sheet 里的 `useState(初始值)`
+   * 会一直拿着第一个人。打开时克隆一份、改草稿、提交时才写回列表，就不需要 effect 去同步，
+   * 也不会踩 `react-hooks/set-state-in-effect`。
+   */
+  const [draft, setDraft] = useState<Member | null>(null);
+  /** `null` = 新增；否则是被编辑成员的 id。 */
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
+
+  // 摘要行按**草稿**算，用户改完不用保存就能看到份数怎么变。
+  const draftProfile = { members, preferences, savedAt: profile.savedAt };
+
+  const openAdd = () => {
+    setEditingId(null);
+    setDraft({ ...DEFAULT_MEMBER, id: createMemberId(), name: '' });
+  };
+
+  const openEdit = (member: Member) => {
+    setEditingId(member.id);
+    setDraft({ ...member, special: [...member.special] });
+  };
+
+  const closeSheet = () => {
+    setDraft(null);
+    setEditingId(null);
+  };
+
+  const submitDraft = () => {
+    if (!draft || draft.name.trim().length === 0) return;
+    const next = { ...draft, name: draft.name.trim() };
+    setMembers((current) =>
+      editingId === null
+        ? [...current, next]
+        : current.map((member) => (member.id === editingId ? next : member)),
+    );
+    setJustSaved(false);
+    closeSheet();
+  };
+
+  const removeMember = (id: string) => {
+    setMembers((current) => current.filter((member) => member.id !== id));
+    setJustSaved(false);
+  };
+
+  const deleteDraft = () => {
+    if (editingId !== null) removeMember(editingId);
+    closeSheet();
+  };
 
   const togglePreference = (preference: Preference) => {
     setPreferences((current) =>
@@ -29,39 +94,62 @@ export default function ProfileScreen() {
         ? current.filter((item) => item !== preference)
         : [...current, preference],
     );
+    setJustSaved(false);
   };
 
   const save = () => {
     // Saving also rebuilds today's menu from the new settings.
-    saveProfile({ servings, goal, preferences });
+    saveProfile({ members, preferences });
     setJustSaved(true);
   };
 
   return (
-    <Screen title="录入" subtitle="填好基本信息，菜单会按你的目标筛选">
+    <Screen title="录入" subtitle="填好每位家人，菜单会按全家的口味和禁忌筛选">
       <View style={styles.section}>
-        <SectionTitle>家里几口人</SectionTitle>
-        <Card>
-          <Stepper value={servings} onChange={setServings} />
-          <ThemedText type="caption" themeColor="textSecondary">
-            食材用量按 {servings} 人份换算，热量按每人份估算。
-          </ThemedText>
-        </Card>
-      </View>
-
-      <View style={styles.section}>
-        <SectionTitle>身体目标</SectionTitle>
-        <View style={styles.options}>
-          {GOALS.map((option) => (
-            <OptionCard
-              key={option}
-              title={GOAL_LABELS[option]}
-              description={GOAL_DESCRIPTIONS[option]}
-              selected={goal === option}
-              onPress={() => setGoal(option)}
+        <SectionTitle>{`家庭成员 · ${members.length} 人`}</SectionTitle>
+        <Card style={styles.listCard}>
+          {members.map((member, index) => (
+            <CardRow
+              key={member.id}
+              divider={index > 0}
+              label={
+                <View>
+                  <ThemedText type="body">{member.name}</ThemedText>
+                  <ThemedText type="caption" themeColor="textSecondary">
+                    {memberSummaryLabel(member)}
+                  </ThemedText>
+                </View>
+              }
+              trailing={
+                <View style={styles.rowActions}>
+                  <PlainButton label="编辑" onPress={() => openEdit(member)} />
+                  <PlainButton label="删除" tone="danger" onPress={() => removeMember(member.id)} />
+                </View>
+              }
             />
           ))}
-        </View>
+          {members.length === 0 ? (
+            <ThemedText type="small" themeColor="textSecondary">
+              还没有成员，先添加一位，菜单才知道该照顾谁。
+            </ThemedText>
+          ) : null}
+        </Card>
+        <SoftButton label="＋ 添加成员" onPress={openAdd} />
+        <ThemedText type="caption" themeColor="textSecondary">
+          家里人数自动等于成员数：
+          {members.length === 0
+            ? '现在是 0 人，食材按成人 1 份算。'
+            : `${householdLabel(draftProfile)}，食材按 ${formatAmount(householdPortions(draftProfile), '人份')}换算。`}
+        </ThemedText>
+        <ThemedText type="caption" themeColor="textSecondary">
+          食量档：成人 1 份、儿童（未满 13 岁）0.5 份、长辈（60 岁起）0.8 份。
+        </ThemedText>
+        {needsMigrationCheck(draftProfile) ? (
+          <ThemedText type="caption" themeColor="tint">
+            旧的单人设置已自动迁移成一位成员「我」，年龄还不知道，先按成人 1
+            份算。补上年龄和状态，食材用量会跟着变准。
+          </ThemedText>
+        ) : null}
       </View>
 
       <View style={styles.section}>
@@ -78,7 +166,7 @@ export default function ProfileScreen() {
             ))}
           </TagRow>
           <ThemedText type="caption" themeColor="textSecondary">
-            选「素食」会排除所有荤菜；没选「辣」时辣菜会被降权，但仍可能出现在菜单里。
+            这里是全家的口味：选「素食」会排除所有荤菜；没选「辣」时辣菜会被降权，但仍可能出现在菜单里。
           </ThemedText>
         </Card>
       </View>
@@ -89,7 +177,7 @@ export default function ProfileScreen() {
         <Card>
           <ThemedText type="headline">已保存</ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            今日菜单已经按新的设置重新生成，切到「今日」就能看到。
+            今日菜单已经按新的成员和偏好重新生成，切到「今日」就能看到。
           </ThemedText>
         </Card>
       ) : null}
@@ -97,12 +185,143 @@ export default function ProfileScreen() {
       <ThemedText type="caption" themeColor="textSecondary" style={styles.footnote}>
         所有数据只保存在这台设备上，不会上传。
       </ThemedText>
+
+      <MemberEditorSheet
+        draft={draft}
+        editing={editingId !== null}
+        onChange={setDraft}
+        onClose={closeSheet}
+        onSubmit={submitDraft}
+        onDelete={deleteDraft}
+      />
     </Screen>
+  );
+}
+
+/** 年龄输入：只留数字，留空就是「没填」（`age: 0`），不要在用户没给的时候编一个数。 */
+function parseAge(text: string): number {
+  const digits = text.replace(/[^0-9]/g, '');
+  if (digits.length === 0) return 0;
+  return Math.min(AGE_MAX, Number(digits));
+}
+
+function toggleSpecial(member: Member, tag: SpecialTag): Member {
+  const special = member.special.includes(tag)
+    ? member.special.filter((item) => item !== tag)
+    : [...member.special, tag];
+  return { ...member, special };
+}
+
+/**
+ * 成员表单。定义在模块顶层（`react-hooks/static-components` 不允许渲染期新建组件），内容全部由
+ * `draft` 渲染 —— 只有 `draft === null` 时才什么都不画。
+ */
+function MemberEditorSheet({
+  draft,
+  editing,
+  onChange,
+  onClose,
+  onSubmit,
+  onDelete,
+}: {
+  draft: Member | null;
+  editing: boolean;
+  onChange: (next: Member) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+  onDelete: () => void;
+}) {
+  const canSubmit = draft !== null && draft.name.trim().length > 0;
+
+  return (
+    <Sheet visible={draft !== null} title={editing ? '编辑成员' : '添加成员'} onClose={onClose}>
+      {draft ? (
+        <>
+          <TextField
+            label="称呼"
+            value={draft.name}
+            onChangeText={(name) => onChange({ ...draft, name })}
+            placeholder="例如：爸爸 / 妈妈 / 宝宝"
+            autoFocus
+            returnKeyType="next"
+          />
+          <TextField
+            label="年龄"
+            value={draft.age > 0 ? String(draft.age) : ''}
+            onChangeText={(text) => onChange({ ...draft, age: parseAge(text) })}
+            placeholder="不填也可以，先按成人 1 份算"
+            keyboardType="number-pad"
+          />
+          <ThemedText type="caption" themeColor="textSecondary">
+            食量：{portionLabel(draft)}。成人 1 份、儿童（未满 13 岁）0.5 份、长辈（60 岁起）0.8
+            份；未满 6 岁的幼儿还会让重辣菜整道被排除。
+          </ThemedText>
+
+          <View style={styles.field}>
+            <ThemedText type="caption" themeColor="textSecondary">
+              体重方向 · 单选
+            </ThemedText>
+            <View style={styles.options}>
+              {GOALS.map((goal) => (
+                <OptionCard
+                  key={goal}
+                  title={GOAL_LABELS[goal]}
+                  description={GOAL_DESCRIPTIONS[goal]}
+                  selected={draft.goal === goal}
+                  onPress={() => onChange({ ...draft, goal })}
+                />
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.field}>
+            <ThemedText type="caption" themeColor="textSecondary">
+              特殊状态 · 可多选
+            </ThemedText>
+            <TagRow>
+              {SPECIAL_TAGS.map((tag) => (
+                <Chip
+                  key={tag}
+                  label={SPECIAL_TAG_LABELS[tag]}
+                  selected={draft.special.includes(tag)}
+                  onPress={() => onChange(toggleSpecial(draft, tag))}
+                />
+              ))}
+            </TagRow>
+            {draft.special.length > 0 ? (
+              <ThemedText type="caption" themeColor="textSecondary">
+                {draft.special.map((tag) => SPECIAL_TAG_HINTS[tag]).join('；')}
+              </ThemedText>
+            ) : null}
+          </View>
+
+          <PrimaryButton
+            label={editing ? '保存成员' : '添加成员'}
+            onPress={onSubmit}
+            disabled={!canSubmit}
+          />
+          {editing ? (
+            <PlainButton label="删除这位成员" tone="danger" onPress={onDelete} />
+          ) : null}
+        </>
+      ) : null}
+    </Sheet>
   );
 }
 
 const styles = StyleSheet.create({
   section: {
+    gap: Spacing.one,
+  },
+  listCard: {
+    gap: 0,
+  },
+  rowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  field: {
     gap: Spacing.one,
   },
   options: {

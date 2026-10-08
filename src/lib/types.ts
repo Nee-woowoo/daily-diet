@@ -8,9 +8,41 @@ export type IngredientCategory = 'meat' | 'veg' | 'egg' | 'staple' | 'seasoning'
 
 export type IngredientUnit = 'g' | 'ml' | '个' | '片' | '根' | '瓣' | '段' | '勺';
 
+/** 辣度。`'hot'` 在「家里有幼儿」时是硬性排除，见 `diet.SPICY_HARD_EXCLUDE_KEYS`。 */
+export type SpiceLevel = 'none' | 'mild' | 'hot';
+
+/** 体重方向就是 `Goal` —— 一位成员只能有一个，所以直接复用，标签和配色都现成。 */
+export type BodyTag = Goal;
+
+/** 成员的特殊状态，可多选。 */
+export type SpecialTag = 'pregnancy' | 'growingChild' | 'seniorLight';
+
+export type MemberTag = BodyTag | SpecialTag;
+
+/**
+ * 菜谱给「某类人」写说明时用的键：成员标签，外加由年龄派生、用户选不到的 `'toddler'`
+ * （<6 岁，见 `members.adviceKeysFor`）。
+ */
+export type AdviceKey = MemberTag | 'toddler';
+
+export interface Member {
+  id: string;
+  /** 称呼：爸爸 / 妈妈 / 宝宝。 */
+  name: string;
+  /**
+   * 0 表示「未知」——从旧版单人设置迁移来的成员没有年龄可继承，宁可留空让用户核对，也不编造。
+   * 引擎按成人一份处理（见 `members.portionFactor`）。
+   */
+  age: number;
+  /** 体重方向，单选。 */
+  goal: Goal;
+  /** 特殊状态，多选。 */
+  special: SpecialTag[];
+}
+
 export interface Ingredient {
   name: string;
-  /** Amount for a single serving; multiplied by `Profile.servings` when displayed. */
+  /** Amount for a single serving; multiplied by the household's total 份数 (`members.householdPortions`). */
   amount: number;
   unit: IngredientUnit;
   category: IngredientCategory;
@@ -20,7 +52,7 @@ export interface Ingredient {
 
 /**
  * A 主食 served alongside a dish, written as data instead of as the free text in `pairing`, so the
- * 今日 tab can scale it by servings and by 身体目标.
+ * 今日 tab can scale it to the household's 份数, each member's 身体目标 (`staples.stapleFactorSum`).
  *
  * Deliberately NOT an `Ingredient`: staples must never enter `Recipe.ingredients`, because those
  * drive fridge matching and the 采购清单 (`planner.matchRecipe`, `shopping.buildShoppingList`).
@@ -62,6 +94,20 @@ export interface Recipe {
    * Never consumed by the planner or the shopping list.
    */
   staple?: StapleServing;
+  /**
+   * 辣度。`'hot'` 会在「家里有幼儿（<6 岁）」时整道排除（规则在 `diet.SPICY_HARD_EXCLUDE_KEYS`，
+   * 不写进 `exclusions`，免得数据漂）。
+   */
+  spice: SpiceLevel;
+  /**
+   * 对某类成员的硬性禁忌 + 原因，例如 `{ pregnancy: '生食' }`。只写真的不能吃的（生食/酒精），
+   * 不写口味偏好 —— 口味走全家 `Profile.preferences`，那只是降权。
+   */
+  exclusions?: Partial<Record<AdviceKey, string>>;
+  /** 今日页「兼顾说明」里的一句话；`{name}` 会替换成成员的称呼。 */
+  care?: Partial<Record<AdviceKey, string>>;
+  /** 详情页「注意事项」里的一句话，写法同上。 */
+  cautions?: Partial<Record<AdviceKey, string>>;
   tip?: string;
 }
 
@@ -74,9 +120,13 @@ export interface FridgeItem {
   addedAt: number;
 }
 
+/**
+ * The household. 家里人数不再是手填的数字 —— 它就是 `members.length`，食量则按每位成员的
+ * 份数相加（见 `members.householdPortions`）。
+ */
 export interface Profile {
-  servings: number;
-  goal: Goal;
+  members: Member[];
+  /** 全家口径的口味偏好：素食会排除荤菜，没选辣时辣菜降权。 */
   preferences: Preference[];
   /** `0` means the user has not saved the form yet. */
   savedAt: number;

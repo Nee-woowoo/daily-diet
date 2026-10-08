@@ -1,6 +1,6 @@
 import type { TagTone } from '@/constants/theme';
 
-import type { Goal, IngredientCategory, MealSlot, Preference } from './types';
+import type { Goal, IngredientCategory, MealSlot, Preference, SpiceLevel } from './types';
 
 export const MEAL_SLOTS: MealSlot[] = ['breakfast', 'lunch', 'dinner'];
 
@@ -57,6 +57,12 @@ export const OIL_LEVEL_LABELS = {
   medium: '中油',
   high: '油偏多',
 } as const;
+
+export const SPICE_LABELS: Record<SpiceLevel, string> = {
+  none: '不辣',
+  mild: '微辣',
+  hot: '重辣',
+};
 
 /** Combines a name with its amount for a single row, e.g. `生抽 · 1 勺`. */
 export function formatAmount(amount: number, unit: string): string {

@@ -1,12 +1,20 @@
 import type { ReactNode } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
-/** Bottom sheet built on `Modal`, used for the add-ingredient form. */
+/** Bottom sheet built on `Modal`, used for the add-ingredient and member forms. */
 export function Sheet({
   visible,
   title,
@@ -40,7 +48,16 @@ export function Sheet({
               </ThemedText>
             </Pressable>
           </View>
-          {children}
+          {/* 表单会长过一屏（成员表单有称呼、年龄、3 个目标卡、3 个状态），所以内容是滚动的：
+              `maxHeight` 落在 sheet 上（父级是全屏的 KeyboardAvoidingView，高度确定），
+              ScrollView 用 flexShrink 让出去，键盘顶上来时保存按钮依然能滚到。 */}
+          <ScrollView
+            style={styles.body}
+            contentContainerStyle={styles.bodyContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}>
+            {children}
+          </ScrollView>
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -61,11 +78,19 @@ const styles = StyleSheet.create({
     borderTopRightRadius: Radius.xl,
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.three,
+    maxHeight: '85%',
     gap: Spacing.three,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  body: {
+    flexShrink: 1,
+  },
+  bodyContent: {
+    gap: Spacing.three,
+    paddingBottom: Spacing.one,
   },
 });

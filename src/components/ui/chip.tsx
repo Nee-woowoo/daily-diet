@@ -34,7 +34,7 @@ export function Chip({
   );
 }
 
-/** Single-select card used for 身体目标; richer than a chip so each goal can explain itself. */
+/** Single-select card used for a member's 体重方向; richer than a chip so each goal can explain itself. */
 export function OptionCard({
   title,
   description,

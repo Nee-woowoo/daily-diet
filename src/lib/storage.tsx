@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 
+import { DEFAULT_PROFILE, migrateProfile } from './members';
 import { generatePlan, todayKey } from './planner';
 import { buildShoppingList, fridgeAmountLabel, type ShoppingLine } from './shopping';
 import type { DayPlan, FridgeItem, IngredientCategory, Profile } from './types';
@@ -19,14 +20,6 @@ const KEYS = {
   plan: 'daily-meals/plan/v1',
   shopping: 'daily-meals/shopping/v1',
 } as const;
-
-/** Used before the user has saved the 录入 form, so the app works on first launch. */
-export const DEFAULT_PROFILE: Profile = {
-  servings: 2,
-  goal: 'balanced',
-  preferences: [],
-  savedAt: 0,
-};
 
 export interface NewFridgeItem {
   name: string;
@@ -100,14 +93,19 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
     (async () => {
       const [storedProfile, storedFridge, storedPlan, storedChecks] = await Promise.all([
-        readJson<Profile>(KEYS.profile),
+        // `unknown` on purpose: what is on disk may be the v1 single-person shape, and only
+        // `migrateProfile` decides what it means. Claiming `Profile` here would be a lie that
+        // `strict` could not catch, and the v1 fields would flow in as `undefined`.
+        readJson<unknown>(KEYS.profile),
         readJson<FridgeItem[]>(KEYS.fridge),
         readJson<DayPlan>(KEYS.plan),
         readJson<StoredChecks>(KEYS.shopping),
       ]);
       if (cancelled) return;
 
-      const nextProfile = storedProfile ?? DEFAULT_PROFILE;
+      // Read in place, same key: a v1 profile becomes a one-member household without the user
+      // doing anything, and the persist effect below rewrites it in the new shape.
+      const nextProfile = storedProfile === null ? DEFAULT_PROFILE : migrateProfile(storedProfile);
       const nextFridge = storedFridge ?? [];
       // A stored plan is only valid on the day it was generated for.
       const isToday = storedPlan !== null && storedPlan.date === todayKey();
@@ -174,7 +172,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
   const clearFridge = useCallback(() => setFridge([]), []);
 
-  // Saving the form also refreshes today's menu, so the new goal and preferences take
+  // Saving the form also refreshes today's menu, so the new members and preferences take
   // effect in one tap instead of leaving a stale plan on the 今日 tab.
   const saveProfile = useCallback(
     (next: Omit<Profile, 'savedAt'>) => {

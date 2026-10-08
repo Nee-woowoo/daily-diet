@@ -35,6 +35,11 @@ export const TagColors = {
   spicy: { fg: '#C22E1C', bg: '#FDECEA' },
   vegetarian: { fg: '#1B7F45', bg: '#E6F7ED' },
   lowSugar: { fg: '#8A3AB8', bg: '#F6ECFB' },
+  /** 孕期 / 发育期儿童：成员自己的状态标签。 */
+  pregnancy: { fg: '#B4377A', bg: '#FCEBF3' },
+  child: { fg: '#1F7A6B', bg: '#E4F5F1' },
+  /** 对被排除的菜：比 `spicy` 更沉的红，别和「辣」混为一谈。 */
+  unsafe: { fg: '#B3261E', bg: '#FBE9E7' },
   calories: { fg: '#A05500', bg: '#FFF3E0' },
   ready: { fg: '#1B7F45', bg: '#E6F7ED' },
   missing: { fg: '#A05500', bg: '#FFF3E0' },

@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Tag, TagRow } from '@/components/ui/tag';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { AI_DISCLAIMER, isAiRecipe } from '@/lib/ai';
 import { cautions, exclusionLabels, exclusionReasons } from '@/lib/advice';
 import { DIET_LEVEL_LABELS, dietDimensions } from '@/lib/diet';
 import {
@@ -60,6 +61,8 @@ export default function RecipeDetailScreen() {
   const staple = recipe.staple ? stapleSuggestion(recipe, profile) : undefined;
   const cautionList = cautions(recipe, profile);
   const excludedLabels = exclusionLabels(recipe, profile);
+  // AI 菜要自己说清来源：它不在 16 道库里，措辞和用量都是模型现编的。
+  const ai = isAiRecipe(recipe);
   // 家里有慢病成员就显示免责提示 —— 即使这道菜一条提醒都没推出来（低等级 + 只有痛风时就是这样）。
   const hasDiseaseMember = profile.members.some(hasMetabolicTag);
 
@@ -73,6 +76,7 @@ export default function RecipeDetailScreen() {
         <Card>
           <ThemedText type="title">{recipe.name}</ThemedText>
           <TagRow>
+            {ai ? <Tag label="AI" tone="ai" /> : null}
             <Tag label={`总耗时 ${recipe.minutes} 分钟`} />
             <Tag label={`${recipe.calories} 千卡/人`} tone="calories" />
             <Tag label={`蛋白质 ${recipe.protein} 克`} />
@@ -102,6 +106,24 @@ export default function RecipeDetailScreen() {
             {portionsLabel}计算
           </ThemedText>
         </Card>
+
+        {/* AI 菜：来源说明 + 模型写的「兼顾说明」一句 + 免责。本地 16 道菜不会有这张卡。 */}
+        {ai ? (
+          <Card>
+            <View style={styles.matchHeader}>
+              <ThemedText type="headline">由 AI 设计</ThemedText>
+              <Tag label="AI" tone="ai" />
+            </View>
+            {recipe.aiCare ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                兼顾说明：{recipe.aiCare}
+              </ThemedText>
+            ) : null}
+            <ThemedText type="caption" themeColor="textSecondary">
+              {AI_DISCLAIMER}
+            </ThemedText>
+          </Card>
+        ) : null}
 
         {excludedLabels.length > 0 ? (
           <Card>

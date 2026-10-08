@@ -48,6 +48,11 @@ export const TagColors = {
   low: { fg: '#1B7F45', bg: '#E6F7ED' },
   medium: { fg: '#A05500', bg: '#FFF3E0' },
   high: { fg: '#B3261E', bg: '#FBE9E7' },
+  /**
+   * AI 生成的菜单：菜卡上的角标与那行免责小字。沿用交互蓝（比 `light` 深一档），
+   * 免得和「清淡」那个偏好标签混成一个颜色。
+   */
+  ai: { fg: '#0B62C4', bg: '#EAF3FF' },
 } as const;
 
 export type TagTone = keyof typeof TagColors;

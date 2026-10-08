@@ -600,8 +600,36 @@ export const RECIPES: Recipe[] = [
   },
 ];
 
+/**
+ * AI 生成的菜谱，与 `RECIPES` 并列的第二本账。
+ *
+ * **为什么不直接 push 进 `RECIPES`**：那个数组同时是「菜谱库」的语义 —— `mine.tsx` 数它一共有几道、
+ * 列出全部，`planner.ts` 的三个候选池与 `safeFallback` 从它里面挑，`advice.excludedRecipes` 拿它当
+ * 「哪些菜不能吃」的对照表。把 AI 的菜混进去，明天的菜单就可能被本地规则挑中一道只存在于今天的菜，
+ * 菜谱库也会一天天长起来。并列一本账，那些地方一个字节都不用改。
+ *
+ * **不变式（`reactCompiler: true` 下的硬要求）**：这是模块级状态，React Compiler 看不见它，而
+ * `index.tsx`（渲染里解析菜谱）、`storage.tsx` 的 `useMemo`（`buildShoppingList` / `buildStaplePlan`
+ * 内部也调 `getRecipe`）都按 `plan` 的**引用**做记忆。所以：
+ *
+ *   registry 变 ⟺ `plan` 引用变，必须在同一次提交里完成。
+ *
+ * 落地就是 `storage.tsx` 里那个唯一的 `publishPlan(plan, aiRecipes)` —— 不要绕过它单独调这个函数。
+ *
+ * **不要**让 `getRecipe` 自己按日期过期（内部查 `todayKey()`）：app 没有跨天定时器，跨天只在水合时
+ * 发生一次；日期感知的 `getRecipe` 会在午夜静默把 AI 菜单变空，而本地菜单照常工作，最难查的就是这种。
+ * 「昨天的菜谱还算不算数」由 `plan.date` 和 store 管。
+ */
+let customRecipes: Recipe[] = [];
+
+/** 整体替换 AI 菜谱（传 `[]` 即清空）。调用方必须遵守上面的不变式。 */
+export function setCustomRecipes(recipes: Recipe[]): void {
+  customRecipes = recipes;
+}
+
+/** 今天的菜单还能不能解析出来 —— 水合时用它复验存下来的 plan，见 `storage.tsx`。 */
 export function getRecipe(id: string): Recipe | undefined {
-  return RECIPES.find((recipe) => recipe.id === id);
+  return RECIPES.find((recipe) => recipe.id === id) ?? customRecipes.find((recipe) => recipe.id === id);
 }
 
 /**

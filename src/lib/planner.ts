@@ -368,6 +368,9 @@ export function generatePlan(
       dinner: (dinner ?? lunch ?? breakfast ?? fallback).id,
     },
     generatedAt: Date.now(),
+    // 显式写出来而不是靠 `DayPlan.source` 的缺省：界面靠它决定要不要打「AI」角标和免责小字，
+    // 让本地菜单自己说清楚「我是本地排的」比让界面去猜 `undefined` 是什么意思更省事。
+    source: 'local',
   };
 }
 

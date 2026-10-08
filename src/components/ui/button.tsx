@@ -1,37 +1,56 @@
-import { Pressable, StyleSheet, Text, type StyleProp, type ViewStyle } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 
 import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
-/** Filled call-to-action, e.g. 「重新生成今日菜单」. */
+/**
+ * Filled call-to-action, e.g. 「重新生成今日菜单」.
+ *
+ * `loading` 只是把「禁用 + 转圈」这两件事绑在一起：AI 生成要 10–30 秒，按钮必须同时说明「正在忙」
+ * 和「别再点了」，拆成两个 prop 就一定会有人只传一个。
+ */
 export function PrimaryButton({
   label,
   onPress,
   disabled,
+  loading,
   style,
 }: {
   label: string;
   onPress: () => void;
   disabled?: boolean;
+  loading?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
   const theme = useTheme();
+  const inert = Boolean(disabled) || Boolean(loading);
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ disabled: Boolean(disabled) }}
-      disabled={disabled}
+      accessibilityState={{ disabled: inert, busy: Boolean(loading) }}
+      disabled={inert}
       onPress={onPress}
       style={({ pressed }) => [
         styles.button,
         {
           backgroundColor: theme.tint,
-          opacity: disabled ? 0.4 : pressed ? 0.85 : 1,
+          opacity: inert ? 0.4 : pressed ? 0.85 : 1,
         },
         style,
       ]}>
-      <Text style={styles.primaryLabel}>{label}</Text>
+      <View style={styles.content}>
+        {loading ? <ActivityIndicator size="small" color="#FFFFFF" /> : null}
+        <Text style={styles.primaryLabel}>{label}</Text>
+      </View>
     </Pressable>
   );
 }
@@ -94,6 +113,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.three,
+  },
+  content: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
   },
   primaryLabel: {
     color: '#FFFFFF',

@@ -187,7 +187,8 @@ export default function ProfileScreen() {
       ) : null}
 
       <ThemedText type="caption" themeColor="textSecondary" style={styles.footnote}>
-        所有数据只保存在这台设备上，不会上传。
+        家庭成员信息保存在本机；配置 AI 密钥后，生成菜单时这些信息（含体检异常那段文字）会发送给
+        DeepSeek。
       </ThemedText>
 
       <MemberEditorSheet
@@ -326,6 +327,20 @@ function MemberEditorSheet({
               {DISEASE_DISCLAIMER}
             </ThemedText>
           </View>
+
+          <TextField
+            label="体检异常（可选）"
+            value={draft.medical ?? ''}
+            onChangeText={(medical) => onChange({ ...draft, medical })}
+            placeholder="例如：尿酸偏高、轻度脂肪肝"
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="done"
+          />
+          <ThemedText type="caption" themeColor="textSecondary">
+            这行文字只是原样交给 AI 当参考（比如「尿酸偏高但还没到痛风」这种还勾不了标签的情况）。
+            要真正排除食材，请在上面勾「代谢疾病」—— 本机的禁忌校验只认那些标签，不认这段文字。
+          </ThemedText>
 
           <PrimaryButton
             label={editing ? '保存成员' : '添加成员'}

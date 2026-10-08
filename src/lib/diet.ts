@@ -1,4 +1,4 @@
-import type { AdviceKey, Ingredient, Preference, Recipe } from './types';
+import type { AdviceKey, Ingredient, Preference, Recipe, SpiceLevel } from './types';
 
 /**
  * What a dish *is*, diet-wise: the thresholds the planner and the member advice both need.
@@ -23,6 +23,49 @@ export const SWEETENER = /糖|蜂蜜/;
  */
 export const SPICY_HARD_EXCLUDE_KEYS: AdviceKey[] = ['toddler'];
 export const SPICY_EXCLUSION_REASON = '重辣';
+
+const SPICE_ORDER: Record<SpiceLevel, number> = { none: 0, mild: 1, hot: 2 };
+
+/** 两个辣度取更辣的那个。给「菜谱自己写的辣度」和「名字里看出来的辣度」取并集用。 */
+export function strongerSpice(a: SpiceLevel, b: SpiceLevel): SpiceLevel {
+  return SPICE_ORDER[a] >= SPICE_ORDER[b] ? a : b;
+}
+
+/**
+ * 「名字里带辣就是重辣」。**比 `Recipe.spice` 严得多，这是有意的**：那 16 道菜的辣度是人手标定过的
+ * （宫保鸡丁 6 个干辣椒 = 重辣，凉拌黄瓜 2 个可选小米辣 = 微辣），而这里判的是 AI 现编的菜，没人标过。
+ * `'hot'` 会让幼儿家庭整道排除，所以宁可错杀：一份被误判重辣的菜单会重试一次，而一道漏判的水煮肉片
+ * 会端到三岁小孩面前。花椒只算微辣 —— 麻不是辣。
+ */
+const HOT_BY_NAME = /辣|麻婆|椒麻|藤椒|红油|水煮鱼|水煮肉/;
+/** 只把 `none` 抬到 `mild`，而 `mild` 不排除任何人（只是详情页上的一行字），所以可以宽一点。 */
+const MILD_BY_NAME = /花椒|胡椒|芥末|咖喱/;
+
+/**
+ * 生食：菜名或主料名里出现这些字样就算。
+ *
+ * 刻意用多字词：「生」单独一个会命中生抽、生姜、生菜、生粉这些完全无辜的名字。
+ */
+const RAW_BY_NAME = /刺身|生食|生腌|鱼生|生鱼|生蚝|醉虾|醉蟹|溏心|半熟|流心|鞑靼/;
+
+/** 只看名字的辣度。连**可选**的调料一起算（`activeSeasonings` 会丢掉可选的）—— 写着「可选」的辣椒也是辣椒。 */
+export function spicyByName(recipe: Recipe): SpiceLevel {
+  const names = [
+    recipe.name,
+    ...recipe.ingredients.map((item) => item.name),
+    ...recipe.seasonings.map((item) => item.name),
+  ];
+  if (names.some((name) => HOT_BY_NAME.test(name))) return 'hot';
+  if (names.some((name) => MILD_BY_NAME.test(name))) return 'mild';
+  return 'none';
+}
+
+/** 这道菜看起来是不是生食/半生。菜名和主料一起看，调料不看（生抽里有「生」字）。 */
+export function looksRawByName(recipe: Recipe): boolean {
+  return [recipe.name, ...recipe.ingredients.map((item) => item.name)].some((name) =>
+    RAW_BY_NAME.test(name),
+  );
+}
 
 /** The recipe-side spellings, exactly as `recipes.ts` writes them — 「虾」/「豆腐」 would never match. */
 const CALCIUM_RICH_NAMES = ['鲜虾', '嫩豆腐', '牛奶', '西兰花', '干香菇'];
@@ -214,6 +257,46 @@ export function saturatedFatLevel(recipe: Recipe): DietLevel {
   const milk = recipe.ingredients.some((item) => item.category !== 'meat' && /奶/.test(item.name));
   if (minced || eggs >= EGG_MEDIUM_COUNT || milk) return 'medium';
   return 'low';
+}
+
+/**
+ * 精制淀粉**按名字**认。`glycemicLevel` 的口径是「`category` 是 staple 且名字不匹配 `WHOLE_GRAIN`」，
+ * 前半句在 AI 菜谱上完全不可信（把「面条」标成 `veg`，升糖就会判低），这里补上名字那一半。
+ */
+const REFINED_STARCH_BY_NAME = /米饭|米线|米粉|河粉|挂面|面条|面粉|馒头|包子|花卷|粉丝|粉条|年糕|粥|面/;
+
+/**
+ * 把「名字能明确对上、但标签写错了」的配料改正过来，返回一份**新菜谱**（原对象不动）。
+ *
+ * 存在的理由只有一个：AI 生成的菜谱里 `category` 与 `spice` 是模型自己填的，而上面那四个分级函数
+ * 全部读这些字段 —— 把「虾」标成 `veg` 就能让 `purineLevel` 判低，痛风成员照样吃到虾。这里不新增
+ * 第二套判定规则，只是把模型的话按名字核对一遍，然后让**原来那套** `isExcluded` 跑在核对过的数据上，
+ * 规则因此永远只有一份。
+ *
+ * `ai.normalizeMenu` 直接把它用在**入库前**的那份菜谱上，所以存进 registry 的就是改正后的版本：
+ * 详情页的「饮食维度」也跟着说实话，而不是显示模型自称的等级。
+ *
+ * 已知的误伤（有意接受）：`BONE_OR_ORGAN` 里的「腰」会把「腰果」判成肉 —— 嘌呤因此从低变中。方向是
+ * 安全的（中档不排除任何人，只是详情页一行字），反过来漏掉一个真腰子却是高嘌呤。宁可错杀。
+ */
+export function repairLabels(recipe: Recipe): Recipe {
+  const ingredients = recipe.ingredients.map((item) => {
+    // 已经标成肉的不用再动（`purineLevel` 已经在看它了）。
+    //
+    // 但**不能**把 `staple` 也一起放过：「鲜虾」标成 `staple` 同样能骗过 `purineLevel`（那里的水产
+    // 判定要求 `category === 'meat'`），而 `staple` 恰好不在 `isExcluded` 的任何一档上 —— 比标成 `veg`
+    // 还干净。这里的赋值只有「改成 meat」和「改成 staple」两个方向，都不会把真主食降级，所以对
+    // `staple` 也照改不误：万一「排骨面」这种名字被连着主料一起判定，方向也是更严的一边。
+    if (item.category === 'meat') return item;
+    if (SEAFOOD.test(item.name) || BONE_OR_ORGAN.test(item.name)) {
+      return { ...item, category: 'meat' as const };
+    }
+    if (REFINED_STARCH_BY_NAME.test(item.name) && !WHOLE_GRAIN.test(item.name)) {
+      return { ...item, category: 'staple' as const };
+    }
+    return item;
+  });
+  return { ...recipe, ingredients, spice: strongerSpice(recipe.spice, spicyByName(recipe)) };
 }
 
 /** 详情页那一行「饮食维度」用的四档名称与顺序。 */

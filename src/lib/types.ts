@@ -48,6 +48,11 @@ export interface Member {
   goal: Goal;
   /** 特殊状态与慢性代谢疾病，多选。字段名保留 `special` 是为了不改存储键、不做数据迁移。 */
   special: MemberTag[];
+  /**
+   * 体检指标异常，自由文本（如「尿酸偏高、轻度脂肪肝」）。**只发给 AI 当上下文**，不参与本地硬排除 —
+   * 自由文本没法可靠地映射成 `MetabolicTag`，猜错了要么漏排要么多排，所以它只影响 prompt。
+   */
+  medical?: string;
 }
 
 export interface Ingredient {
@@ -119,6 +124,12 @@ export interface Recipe {
   exclusions?: Partial<Record<AdviceKey, string>>;
   /** 今日页「兼顾说明」里的一句话；`{name}` 会替换成成员的称呼。 */
   care?: Partial<Record<AdviceKey, string>>;
+  /**
+   * AI 自己写的那句「兼顾说明」，**只增不减**：它与上面那张按标签查表的 `care` 并列显示，不替换任何
+   * 模板文案 —— 模板里带着每位成员各自的疾病照顾（如高血压的「少喝汤汁」），用一句话覆盖掉它是净损失。
+   * 只有 AI 生成的菜谱有。
+   */
+  aiCare?: string;
   /** 详情页「注意事项」里的一句话，写法同上。 */
   cautions?: Partial<Record<AdviceKey, string>>;
   tip?: string;
@@ -150,4 +161,9 @@ export interface DayPlan {
   date: string;
   meals: Record<MealSlot, string>;
   generatedAt: number;
+  /**
+   * 这份菜单是谁排的。**只用于展示**（角标与免责小字）—— 不要拿它判断「AI 菜谱还在不在」，
+   * 那是 `getRecipe` 能不能解析出 id 的事（见 `recipes.setCustomRecipes`）。缺省 = `'local'`。
+   */
+  source?: 'local' | 'ai';
 }

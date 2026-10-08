@@ -262,6 +262,27 @@ function readSpecial(value: unknown): MemberTag[] {
   return STATUS_TAGS.filter((tag) => value.includes(tag));
 }
 
+/** 体检异常文本的上限。再长也没有信息量，只会挤掉 prompt 里别的上下文。 */
+const MEDICAL_MAX_LENGTH = 200;
+
+/**
+ * 体检指标异常是自由文本，**只进 prompt**（见 `Member.medical`）。归一放在这里、而不是发请求前，
+ * 是为了让「存下来的」和「发出去的」永远是同一个值 —— 否则界面上看到的和模型读到的可以不一样。
+ *
+ * 换行/制表/控制字符压成一个空格、反引号直接删掉：这段文本会原样插进 prompt，多一行就可能被读成
+ * 新的一条指令，反引号则可能是代码块围栏。**不**试图在这里做任何语义过滤（比如认出「尿酸」就加个
+ * 痛风标签）—— 猜错了要么漏排要么多排，那是 `special` 该干的事，用户自己勾。
+ */
+function readMedical(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const cleaned = value
+    .replace(/\p{Cc}/gu, ' ')
+    .replace(/`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.length > 0 ? cleaned.slice(0, MEDICAL_MAX_LENGTH) : undefined;
+}
+
 function readMember(value: unknown): Member | null {
   if (!isRecord(value)) return null;
   const name = typeof value.name === 'string' ? value.name.trim() : '';
@@ -273,6 +294,7 @@ function readMember(value: unknown): Member | null {
     age: readAge(value.age),
     goal: readGoal(value.goal),
     special: readSpecial(value.special),
+    medical: readMedical(value.medical),
   };
 }
 

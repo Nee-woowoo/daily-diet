@@ -2,11 +2,12 @@ import { router } from 'expo-router';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { PrimaryButton } from '@/components/ui/button';
+import { PlainButton, PrimaryButton } from '@/components/ui/button';
 import { Card, CardRow, PressableCard } from '@/components/ui/card';
 import { Tag, TagRow } from '@/components/ui/tag';
 import { Screen } from '@/components/ui/screen';
 import { Spacing } from '@/constants/theme';
+import { AI_DISCLAIMER, isAiRecipe, NO_KEY_HINT } from '@/lib/ai';
 import { careLine, excludedRecipes } from '@/lib/advice';
 import { MEAL_SLOT_LABELS, MEAL_SLOTS, OIL_LEVEL_LABELS } from '@/lib/labels';
 import {
@@ -29,7 +30,19 @@ import { useAppStore } from '@/lib/storage';
 import type { MealSlot, Recipe } from '@/lib/types';
 
 export default function TodayScreen() {
-  const { hydrated, plan, fridge, profile, regeneratePlan, shoppingList } = useAppStore();
+  const {
+    hydrated,
+    plan,
+    fridge,
+    profile,
+    regenerateToday,
+    regeneratePlan,
+    shoppingList,
+    aiConfigured,
+    aiBusy,
+    aiError,
+    cancelAiGeneration,
+  } = useAppStore();
 
   if (!hydrated || !plan) {
     return (
@@ -74,7 +87,62 @@ export default function TodayScreen() {
     <Screen
       title="今日"
       subtitle={todayLabel()}
-      footer={<PrimaryButton label="重新生成今日菜单" onPress={regeneratePlan} />}>
+      footer={
+        <>
+          <PrimaryButton
+            label={aiBusy ? 'AI 正在设计菜单…' : '重新生成今日菜单'}
+            onPress={regenerateToday}
+            loading={aiBusy}
+          />
+          {/* 没配 Key 时说明按钮会走哪条路。放在按钮正下方而不是页面顶部：这句话说的是「下次生成
+              会怎样」，贴着按钮才不会被读成对当前这份菜单的描述（清掉 Key 后菜单可能还是 AI 排的）。 */}
+          {!aiConfigured ? (
+            <ThemedText type="caption" themeColor="textSecondary" style={styles.footerNote}>
+              {NO_KEY_HINT}
+            </ThemedText>
+          ) : null}
+        </>
+      }>
+      {/* 生成中：预计 10–30 秒，所以除了按钮上的转圈，还给一句人话和一个出口。
+          切到别的 Tab 不会中断请求 —— 请求已经计费了，让它跑完并缓存下来。 */}
+      {aiBusy ? (
+        <Card>
+          <View style={styles.busyRow}>
+            <ActivityIndicator />
+            <ThemedText type="body">AI 正在设计菜单，通常 10–30 秒</ThemedText>
+          </View>
+          <ThemedText type="caption" themeColor="textSecondary">
+            生成完会按家人的禁忌在本机复核一遍。切到别的页面也不会中断。
+          </ThemedText>
+          <PlainButton label="取消" onPress={cancelAiGeneration} />
+        </Card>
+      ) : null}
+
+      {/* 失败：说清原因 + 一键重试。AI 已经回退到本地规则时，菜单其实已经换好了，
+          所以只有「重试」；还在吃 AI 菜单时才给「改用本地规则」这个出口。 */}
+      {aiError && !aiBusy ? (
+        <Card>
+          <ThemedText type="headline">
+            {aiError.kind === 'auth' || aiError.kind === 'balance' ? 'AI 暂时用不了' : 'AI 生成失败'}
+          </ThemedText>
+          <ThemedText type="caption" themeColor="textSecondary">
+            {aiError.message}
+          </ThemedText>
+          <View style={styles.errorRow}>
+            <PlainButton label="重试" onPress={regenerateToday} />
+            {plan.source === 'ai' ? (
+              <PlainButton label="改用本地规则" onPress={regeneratePlan} />
+            ) : null}
+          </View>
+        </Card>
+      ) : null}
+
+      {plan.source === 'ai' ? (
+        <ThemedText type="caption" themeColor="textSecondary" style={styles.topNote}>
+          {AI_DISCLAIMER}
+        </ThemedText>
+      ) : null}
+
       <Card>
         <View style={styles.summaryRow}>
           <View>
@@ -209,6 +277,7 @@ export default function TodayScreen() {
         const suggestion = stapleSuggestion(recipe, profile);
         // 「兼顾说明」：这道菜怎么照顾到每个人。空串（家里还没有成员）时不渲染。
         const care = careLine(recipe, profile);
+        const ai = isAiRecipe(recipe);
 
         return (
           <PressableCard
@@ -227,6 +296,7 @@ export default function TodayScreen() {
             <ThemedText type="title">{recipe.name}</ThemedText>
 
             <TagRow>
+              {ai ? <Tag label="AI" tone="ai" /> : null}
               <Tag label={`${recipe.minutes} 分钟`} />
               <Tag label={`${recipe.calories} 千卡/人`} tone="calories" />
               <Tag
@@ -245,6 +315,14 @@ export default function TodayScreen() {
             {care ? (
               <ThemedText type="caption" themeColor="textSecondary" style={styles.careText}>
                 {care}
+              </ThemedText>
+            ) : null}
+
+            {/* 模型写的「兼顾说明」是**多出来的一行**，不替换上面那句模板文案：模板那句由配料
+                算出、高血压会提醒少喝汤汁，比模型的一句话更靠得住。 */}
+            {recipe.aiCare ? (
+              <ThemedText type="caption" themeColor="textSecondary" style={styles.careText}>
+                AI 说明：{recipe.aiCare}
               </ThemedText>
             ) : null}
 
@@ -297,6 +375,23 @@ const styles = StyleSheet.create({
   },
   matchText: {
     flexShrink: 1,
+  },
+  // 卡片外的那行免责小字贴着屏幕边缘太挤，退回一档内边距。
+  topNote: {
+    paddingHorizontal: Spacing.one,
+  },
+  footerNote: {
+    textAlign: 'center',
+  },
+  busyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  errorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
   },
   // 兼顾说明会长到两行，给它一点点左内边距当作引文，和上面的标签区分开。
   careText: {

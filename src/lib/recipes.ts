@@ -1,4 +1,4 @@
-import type { IngredientUnit, Recipe } from './types';
+import type { IngredientUnit, Recipe, StapleServing } from './types';
 
 /**
  * Built-in recipe library. v1 deliberately ships fixed data instead of calling a model,
@@ -9,7 +9,20 @@ import type { IngredientUnit, Recipe } from './types';
  * - Seasoning liquids are measured in 勺 (1 勺 ≈ 15 毫升), powders in 克, aromatics in 瓣/片/根.
  * - `ingredients` are the main ingredients that drive fridge matching; `seasonings` are
  *   assumed to be pantry staples and never count as missing.
+ * - `staple` is the 主食 a dish is served with, structured so the 今日 tab can scale it by servings
+ *   and by 身体目标. 午/晚餐 must set it (their `pairing` is only a staple); 早餐 leaves it
+ *   undefined because its staple is already one of `ingredients` (category: 'staple'), which also
+ *   means its energy is inside `calories`.
+ * - Never move a `staple` into `ingredients`: those drive fridge matching and the 采购清单, and a
+ *   suggested bowl of rice must not count as a missing ingredient.
  */
+
+/** Shared 主食 suggestions so the same bowl is written once. Amounts are per person. */
+const WHITE_RICE: StapleServing = { name: '白米饭', amount: 150, unit: 'g' };
+const MIXED_GRAIN_RICE: StapleServing = { name: '杂粮饭', amount: 150, unit: 'g' };
+const BROWN_RICE: StapleServing = { name: '糙米饭', amount: 150, unit: 'g' };
+const MILLET_PORRIDGE: StapleServing = { name: '小米粥', amount: 250, unit: 'g' };
+
 export const RECIPES: Recipe[] = [
   {
     id: 'xiaomi-nangua-zhou',
@@ -69,7 +82,7 @@ export const RECIPES: Recipe[] = [
       '加 400 毫升热水煮沸，下挂面煮 3 分钟至断生。',
       '倒回炒蛋煮 30 秒，撒葱花出锅。',
     ],
-    pairing: '单吃即可，不用额外主食',
+    pairing: '面本身就是主食，不用再配',
     tip: '鸡蛋先盛出最后回锅，口感才不会老。',
   },
   {
@@ -158,7 +171,8 @@ export const RECIPES: Recipe[] = [
       '加盐、白糖和番茄酱炒匀。',
       '倒回鸡蛋翻炒 30 秒，撒葱花出锅。',
     ],
-    pairing: '配白米饭 1 小碗（约 150 克）',
+    staple: WHITE_RICE,
+    pairing: '配白米饭 1 小碗',
     tip: '番茄烫皮后更容易出汁，成品不会水塌塌。',
   },
   {
@@ -187,6 +201,7 @@ export const RECIPES: Recipe[] = [
       '热锅下油，中火爆香蒜片。',
       '倒入西兰花大火翻炒 1 分钟，加盐和生抽炒匀出锅。',
     ],
+    staple: MIXED_GRAIN_RICE,
     pairing: '配杂粮饭 1 小碗',
     tip: '焯水后过冷水能锁住翠绿，也不会炒出黄水。',
   },
@@ -216,6 +231,7 @@ export const RECIPES: Recipe[] = [
       '先下菜梗炒 30 秒，再下菜叶大火翻炒 1 分钟。',
       '加盐和生抽，撒上剩余蒜末炒匀出锅。',
     ],
+    staple: WHITE_RICE,
     pairing: '配白米饭 1 小碗',
     tip: '蒜末分两次放，起锅前那一把最提香。',
   },
@@ -249,6 +265,7 @@ export const RECIPES: Recipe[] = [
       '关火后静置 2 分钟再切片。',
       '同锅爆香蒜片，下西兰花翻炒 30 秒，与鸡胸肉一起装盘。',
     ],
+    staple: BROWN_RICE,
     pairing: '配糙米饭 1 小碗',
     tip: '煎好静置 2 分钟再切，肉汁才不会全流出来。',
   },
@@ -280,6 +297,7 @@ export const RECIPES: Recipe[] = [
       '捞出立刻过冰水 30 秒，沥干装盘。',
       '生抽、香醋、香油加姜末调成蘸料。',
     ],
+    staple: WHITE_RICE,
     pairing: '配白米饭 1 小碗',
     tip: '煮好过一遍冰水，虾肉更紧实弹牙。',
   },
@@ -316,6 +334,7 @@ export const RECIPES: Recipe[] = [
       '加 200 毫升热水和生抽煮沸，下豆腐轻推煮 3 分钟。',
       '淀粉加水调匀勾芡，出锅撒花椒粉和葱花。',
     ],
+    staple: WHITE_RICE,
     pairing: '配白米饭 1 小碗',
     tip: '全程用推的别用铲子翻，豆腐才不碎。',
   },
@@ -355,6 +374,7 @@ export const RECIPES: Recipe[] = [
       '下葱段、姜蒜炒 30 秒，倒入料汁炒至均匀裹上。',
       '关火拌入花生米出锅。',
     ],
+    staple: WHITE_RICE,
     pairing: '配白米饭 1 小碗',
     tip: '花生米最后拌入才酥，早放会回软。',
   },
@@ -388,6 +408,8 @@ export const RECIPES: Recipe[] = [
       '淋白醋、加盐，下青椒丝炒 1 分钟。',
       '加蒜片炒匀出锅。',
     ],
+    // 土豆 is the dish's own starchy main, not its 主食 — hence the explicit field.
+    staple: MILLET_PORRIDGE,
     pairing: '配小米粥 1 碗',
     tip: '土豆丝冲掉淀粉再炒，口感才爽脆不粘锅。',
   },
@@ -423,6 +445,7 @@ export const RECIPES: Recipe[] = [
       '加剩余生抽、蚝油和 100 毫升澄清的泡菇水，盖盖小火焖 8 分钟。',
       '开盖大火收汁，撒葱花出锅。',
     ],
+    staple: WHITE_RICE,
     pairing: '配白米饭 1 小碗',
     tip: '泡菇水是整道菜的鲜味来源，沉淀别倒进去。',
   },
@@ -455,6 +478,7 @@ export const RECIPES: Recipe[] = [
       '下冬瓜继续炖 15 分钟，至冬瓜透明。',
       '加盐和白胡椒粉调味，撒葱花。',
     ],
+    staple: WHITE_RICE,
     pairing: '配白米饭 1 小碗',
     tip: '焯水后用温水冲，冷水一激肉会发柴。',
   },
@@ -487,6 +511,7 @@ export const RECIPES: Recipe[] = [
       '生抽、香醋、白糖、香油调成料汁。',
       '所有材料拌匀，冷藏 5 分钟风味更好。',
     ],
+    staple: MIXED_GRAIN_RICE,
     pairing: '配杂粮饭 1 小碗',
     tip: '先腌出水再拌，黄瓜才脆不出汤。',
   },

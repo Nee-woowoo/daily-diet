@@ -44,7 +44,7 @@ export default function ProfileScreen() {
         <Card>
           <Stepper value={servings} onChange={setServings} />
           <ThemedText type="caption" themeColor="textSecondary">
-            食材用量和总热量都会按 {servings} 人份换算。
+            食材用量按 {servings} 人份换算，热量按每人份估算。
           </ThemedText>
         </Card>
       </View>

@@ -3,7 +3,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { PrimaryButton } from '@/components/ui/button';
-import { Card, PressableCard } from '@/components/ui/card';
+import { Card, CardRow, PressableCard } from '@/components/ui/card';
 import { Tag, TagRow } from '@/components/ui/tag';
 import { Screen } from '@/components/ui/screen';
 import { Spacing } from '@/constants/theme';
@@ -16,6 +16,14 @@ import {
 } from '@/lib/labels';
 import { matchRecipe, todayLabel } from '@/lib/planner';
 import { getRecipe } from '@/lib/recipes';
+import {
+  buildStaplePlan,
+  roundKcal,
+  stapleAmountLabel,
+  stapleGoalLabel,
+  stapleLineLabel,
+  stapleSuggestion,
+} from '@/lib/staples';
 import { useAppStore } from '@/lib/storage';
 import type { MealSlot, Recipe } from '@/lib/types';
 
@@ -40,6 +48,11 @@ export default function TodayScreen() {
   );
   const totalCalories = meals.reduce((sum, meal) => sum + meal.recipe.calories, 0);
 
+  const staples = buildStaplePlan(plan, profile);
+  const stapleKcal = roundKcal(staples.addedKcalPerServing);
+  // Both roundings happen once, on the raw total: rounding the staple first would add up to 10 kcal of drift.
+  const dayKcal = roundKcal(totalCalories + staples.addedKcalPerServing);
+
   return (
     <Screen
       title="今日"
@@ -59,12 +72,58 @@ export default function TodayScreen() {
           </TagRow>
         </View>
         <ThemedText type="caption" themeColor="textSecondary">
-          每人份估算，只算菜品本身、不含搭配的主食。
+          每人份估算，只算菜品本身、不含另配的主食（见下方「今日主食」）。
           {fridge.length > 0
             ? `会优先挑冰箱里已有食材的菜，当前有 ${fridge.length} 样。`
             : '冰箱还是空的，先添加食材，菜单会更实用。'}
         </ThemedText>
       </Card>
+
+      {staples.lines.length > 0 ? (
+        <Card>
+          <View style={styles.mealHeader}>
+            <ThemedText type="headline">今日主食</ThemedText>
+            <ThemedText type="caption" themeColor="textTertiary">
+              {profile.servings} 人份合计
+            </ThemedText>
+          </View>
+          <ThemedText type="title">
+            {stapleKcal > 0 ? `另配主食约 ${stapleKcal} 千卡/人` : '今天的主食都在菜里'}
+          </ThemedText>
+          {stapleKcal > 0 ? (
+            <ThemedText type="small" themeColor="textSecondary">
+              含主食全天约 {dayKcal} 千卡/人
+            </ThemedText>
+          ) : null}
+
+          <View style={styles.stapleList}>
+            {staples.lines.map((line, index) => (
+              <CardRow
+                key={line.slot}
+                divider={index > 0}
+                label={
+                  <ThemedText type="body">
+                    {MEAL_SLOT_LABELS[line.slot]} · {line.name}
+                    {line.fromDish ? '（本菜已含）' : ''}
+                  </ThemedText>
+                }
+                value={
+                  <ThemedText type="body" themeColor="textSecondary">
+                    {stapleAmountLabel(line)}
+                  </ThemedText>
+                }
+              />
+            ))}
+          </View>
+
+          <ThemedText type="caption" themeColor="textSecondary">
+            {`热量为每人份估算；已按「${stapleGoalLabel(profile.goal)}」换算。`}
+          </ThemedText>
+          <ThemedText type="caption" themeColor="textSecondary">
+            早餐的主食就是菜本身，已含在菜品热量里；主食请自备，不在采购清单和冰箱匹配里。
+          </ThemedText>
+        </Card>
+      ) : null}
 
       {profile.savedAt === 0 ? (
         <PressableCard onPress={() => router.navigate('/profile')}>
@@ -94,6 +153,7 @@ export default function TodayScreen() {
       {meals.map(({ slot, recipe }) => {
         const match = matchRecipe(recipe, fridge);
         const ready = match.missing.length === 0;
+        const suggestion = stapleSuggestion(recipe, profile);
 
         return (
           <PressableCard
@@ -113,7 +173,7 @@ export default function TodayScreen() {
 
             <TagRow>
               <Tag label={`${recipe.minutes} 分钟`} />
-              <Tag label={`${recipe.calories} 千卡`} tone="calories" />
+              <Tag label={`${recipe.calories} 千卡/人`} tone="calories" />
               <Tag
                 label={OIL_LEVEL_LABELS[recipe.oilLevel]}
                 tone={recipe.oilLevel === 'low' ? 'ready' : 'neutral'}
@@ -127,7 +187,15 @@ export default function TodayScreen() {
               </ThemedText>
             </View>
 
-            {recipe.pairing ? (
+            {suggestion ? (
+              <ThemedText type="caption" themeColor="textSecondary">
+                {stapleLineLabel(suggestion, profile)}
+              </ThemedText>
+            ) : null}
+
+            {/* 午晚餐的 pairing 写的就是主食，已经由上面那行按人数和目标算好了；早餐的 pairing
+                是蛋白/饮品这类别的搭配，照原样显示。 */}
+            {recipe.pairing && !recipe.staple ? (
               <ThemedText type="caption" themeColor="textSecondary">
                 建议搭配：{recipe.pairing}
               </ThemedText>
@@ -160,6 +228,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
+  },
+  // Cards holding `CardRow`s drop the card's gap: the rows carry their own padding and hairlines
+  // (same as the 食材清单 card on the recipe page).
+  stapleList: {
+    gap: 0,
   },
   matchText: {
     flexShrink: 1,

@@ -83,7 +83,7 @@ export default function MineScreen() {
             ]}>
             <ThemedText type="body">{recipe.name}</ThemedText>
             <ThemedText type="caption" themeColor="textSecondary">
-              {recipe.minutes} 分钟 · {recipe.calories} 千卡
+              {recipe.minutes} 分钟 · {recipe.calories} 千卡/人
             </ThemedText>
           </Pressable>
         ))}

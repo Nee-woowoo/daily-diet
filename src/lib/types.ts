@@ -18,6 +18,20 @@ export interface Ingredient {
   optional?: boolean;
 }
 
+/**
+ * A 主食 served alongside a dish, written as data instead of as the free text in `pairing`, so the
+ * 今日 tab can scale it by servings and by 身体目标.
+ *
+ * Deliberately NOT an `Ingredient`: staples must never enter `Recipe.ingredients`, because those
+ * drive fridge matching and the 采购清单 (`planner.matchRecipe`, `shopping.buildShoppingList`).
+ */
+export interface StapleServing {
+  name: string;
+  /** Amount for a single serving, exactly like `Ingredient.amount`. */
+  amount: number;
+  unit: IngredientUnit;
+}
+
 export interface Recipe {
   id: string;
   name: string;
@@ -35,8 +49,19 @@ export interface Recipe {
   ingredients: Ingredient[];
   seasonings: Ingredient[];
   steps: string[];
-  /** What to serve alongside, shown on the meal card. */
+  /**
+   * Free text served alongside. `pairing` stays the human-readable original, but when `staple` is
+   * set its staple half is superseded by that structured data on the 今日 card — the two are never
+   * shown together, since only one of them can be scaled to the household.
+   */
   pairing?: string;
+  /**
+   * The 主食 to serve with this dish. 午/晚餐 must set it (their `pairing` string is only a staple).
+   * 早餐 leaves it undefined on purpose: its staple is one of `ingredients` with
+   * `category: 'staple'`, which also means that staple's energy is already inside `calories`.
+   * Never consumed by the planner or the shopping list.
+   */
+  staple?: StapleServing;
   tip?: string;
 }
 

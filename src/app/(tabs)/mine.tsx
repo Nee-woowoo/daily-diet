@@ -19,9 +19,9 @@ import { useTheme } from '@/hooks/use-theme';
 export default function MineScreen() {
   const {
     profile,
-    fridge,
+    pantry,
     plan,
-    clearFridge,
+    clearPantry,
     regeneratePlan,
     aiConfigured,
     aiKeyTail,
@@ -65,10 +65,10 @@ export default function MineScreen() {
     ]);
   };
 
-  const confirmClearFridge = () => {
-    Alert.alert('清空冰箱', '所有已添加的食材都会被删除，确定吗？', [
+  const confirmClearPantry = () => {
+    Alert.alert('清空食库', '所有已添加的食材都会被删除，确定吗？', [
       { text: '取消', style: 'cancel' },
-      { text: '清空', style: 'destructive', onPress: clearFridge },
+      { text: '清空', style: 'destructive', onPress: clearPantry },
     ]);
   };
 
@@ -103,7 +103,7 @@ export default function MineScreen() {
 
       <SectionTitle>我的数据</SectionTitle>
       <Card style={styles.listCard}>
-        <CardRow divider={false} label={<ThemedText type="body">冰箱食材</ThemedText>} value={<ThemedText type="body" themeColor="textSecondary">{fridge.length} 样</ThemedText>} />
+        <CardRow divider={false} label={<ThemedText type="body">食库食材</ThemedText>} value={<ThemedText type="body" themeColor="textSecondary">{pantry.length} 样</ThemedText>} />
         <CardRow label={<ThemedText type="body">菜谱库</ThemedText>} value={<ThemedText type="body" themeColor="textSecondary">{RECIPES.length} 道</ThemedText>} />
         <CardRow label={<ThemedText type="body">今日菜单</ThemedText>} value={<ThemedText type="body" themeColor="textSecondary">{plan ? (plan.source === 'ai' ? '已生成（AI）' : '已生成（本地规则）') : '未生成'}</ThemedText>} />
       </Card>
@@ -116,8 +116,8 @@ export default function MineScreen() {
           trailing={<PlainButton label="用本地规则重新生成" onPress={regeneratePlan} />}
         />
         <CardRow
-          label={<ThemedText type="body">清空冰箱</ThemedText>}
-          trailing={<PlainButton label="清空" tone="danger" onPress={confirmClearFridge} />}
+          label={<ThemedText type="body">清空食库</ThemedText>}
+          trailing={<PlainButton label="清空" tone="danger" onPress={confirmClearPantry} />}
         />
       </Card>
 
@@ -152,7 +152,7 @@ export default function MineScreen() {
           {aiConfigured ? <PlainButton label="清除" tone="danger" onPress={clearKey} /> : null}
         </View>
         <ThemedText type="caption" themeColor="textSecondary">
-          配置后，生成菜单时会把家庭成员信息（称呼、年龄、体重方向、疾病标签、体检异常）和冰箱食材发给
+          配置后，生成菜单时会把家庭成员信息（称呼、年龄、体重方向、疾病标签、体检异常）和食库食材发给
           DeepSeek，用来设计当天三餐。密钥只保存在这台设备上，未加密。拿不准时点「测试连接」先验证一次。
         </ThemedText>
       </Card>
@@ -193,7 +193,7 @@ export default function MineScreen() {
       <Card>
         <ThemedText type="body">每日饮食 · 版本 1.0.0</ThemedText>
         <ThemedText type="caption" themeColor="textSecondary">
-          菜单由冰箱食材和家庭成员在本机计算生成；配置了 API 密钥时改为请 AI 设计，规则仍然在本机复核一遍
+          菜单由食库食材和家庭成员在本机计算生成；配置了 API 密钥时改为请 AI 设计，规则仍然在本机复核一遍
           家人的硬禁忌。数据存放在设备本地存储中，卸载应用会一并清除。
         </ThemedText>
       </Card>

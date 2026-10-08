@@ -16,29 +16,56 @@ import {
   menuPlan,
   parseMenu,
   retryCorrection,
+  sanitizeNotes,
+  shouldRetry,
   type AiFailure,
 } from './ai';
 import { callDeepSeek, testConnection } from './deepseek';
-import { MEAL_SLOTS } from './labels';
+import { pruneHistory, readHistory, recordDishes, type DishHistoryEntry } from './history';
+import { CATEGORY_ORDER, MEAL_SLOTS } from './labels';
 import { DEFAULT_PROFILE, migrateProfile } from './members';
 import { generatePlan, todayKey } from './planner';
 import { getRecipe, setCustomRecipes } from './recipes';
-import { buildShoppingList, fridgeAmountLabel, type ShoppingLine } from './shopping';
-import type { DayPlan, FridgeItem, IngredientCategory, Profile, Recipe } from './types';
+import { buildShoppingList, pantryAmountLabel, type ShoppingLine } from './shopping';
+import type { DayPlan, PantryItem, IngredientCategory, Profile, Recipe } from './types';
 
 const KEYS = {
   profile: 'daily-meals/profile/v1',
-  fridge: 'daily-meals/fridge/v1',
-  plan: 'daily-meals/plan/v1',
+  pantry: 'daily-meals/pantry/v1',
+  /**
+   * v1 → v2：`DayPlan.meals` 从「一餐一个 id」变成「一餐一个 id 数组」（AI 一餐 2–3 个组成部分）。
+   * 升键而不是兼容两种形状 —— 旧的当天缓存整份读不到，水合走重算（用户已同意「旧的当天缓存作废」）。
+   */
+  plan: 'daily-meals/plan/v2',
   shopping: 'daily-meals/shopping/v1',
   aiKey: 'daily-meals/ai-key/v1',
   aiRecipes: 'daily-meals/ai-recipes/v1',
+  dishHistory: 'daily-meals/dish-history/v1',
+} as const;
+
+/**
+ * 改过名的旧键，**只读一次就删掉**：「冰箱」改名「食库」时食材搬过一次家。
+ *
+ * 留着它会让同一份数据有两个来源 —— 用户在新键里删掉一样食材，某次新键读到空（首次安装、被清过）
+ * 又会从旧键里把那份旧的带回来，看起来像「删了又自己长出来」。迁移顺序见水合那一段。
+ */
+const LEGACY_KEYS = {
+  pantry: 'daily-meals/fridge/v1',
 } as const;
 
 /** AI 连续失败到这个次数就自动换回本地规则。 */
 const AI_FAILURE_LIMIT = 2;
 
-export interface NewFridgeItem {
+/**
+ * 一次点击最多发几次请求。第二次是**自动重试**：把第一次的失败原因讲给模型听，让它换一份。
+ *
+ * 与 `AI_FAILURE_LIMIT` 数值相同、含义不同：失败次数是**按每次请求**累计的（见 `generateWithAi`），
+ * 所以「一次点击里两次都不合格」正好等于「连续失败 2 次」—— 用户按一次按钮就得到回退，与需求里
+ * 「连续失败两次再回退本地规则」对得上。
+ */
+const AI_ATTEMPTS = 2;
+
+export interface NewPantryItem {
   name: string;
   amount: string;
   category: IngredientCategory;
@@ -63,6 +90,11 @@ interface StoredAiRecipes {
   recipes: Recipe[];
 }
 
+/** 「最近几天做过哪些菜」在磁盘上的形状（见 `history.ts`）。 */
+interface StoredDishHistory {
+  entries: DishHistoryEntry[];
+}
+
 /** 「测试连接」的界面状态。成功只留耗时 —— 响应内容一个字节都不进内存。 */
 export type AiTestState =
   | { state: 'idle' }
@@ -74,19 +106,19 @@ interface AppStore {
   /** False until AsyncStorage has been read, so screens do not flash empty states. */
   hydrated: boolean;
   profile: Profile;
-  fridge: FridgeItem[];
+  pantry: PantryItem[];
   plan: DayPlan | null;
-  addFridgeItem: (input: NewFridgeItem) => void;
-  removeFridgeItem: (id: string) => void;
-  clearFridge: () => void;
+  addPantryItem: (input: NewPantryItem) => void;
+  removePantryItem: (id: string) => void;
+  clearPantry: () => void;
   saveProfile: (next: Omit<Profile, 'savedAt'>) => void;
   /** Today's missing ingredients merged across meals, each flagged with whether it is checked off. */
   shoppingList: ShoppingLine[];
   /** How many lines are still unchecked — the 购物 tab badge. */
   shoppingPending: number;
   toggleBought: (key: string) => void;
-  /** Writes the checked-off lines into the fridge as one batch; they then leave the list. */
-  addBoughtToFridge: () => void;
+  /** Writes the checked-off lines into the pantry as one batch; they then leave the list. */
+  addBoughtToPantry: () => void;
 
   /* ---------------- AI ---------------- */
 
@@ -102,6 +134,8 @@ interface AppStore {
   aiKeyTail: string | null;
   /** 正在生成或正在测试连接。 */
   aiBusy: boolean;
+  /** 正在发第几次请求（1 或 2）：第二次是自动重试，忙碌卡上换一句话。 */
+  aiAttempt: number;
   /** 上一次生成失败的原因；成功后清空。 */
   aiError: AiFailure | null;
   aiTest: AiTestState;
@@ -132,6 +166,29 @@ function writeJson(key: string, value: unknown) {
   AsyncStorage.setItem(key, JSON.stringify(value)).catch((error) => {
     console.warn(`[storage] 写入 ${key} 失败`, error);
   });
+}
+
+/**
+ * `writeJson` 的「等它写完」版本，只给搬存储键用：把旧键的内容搬进新键时，**必须确认新键已经落地
+ * 再删旧键**，否则中间被杀进程就是真的丢数据。返回是否写成功。
+ */
+async function writeJsonNow(key: string, value: unknown): Promise<boolean> {
+  try {
+    await AsyncStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (error) {
+    console.warn(`[storage] 写入 ${key} 失败`, error);
+    return false;
+  }
+}
+
+/** 尽力删掉一个键：删不掉（理论上不会）只值得一行日志，不该让水合失败。 */
+async function dropKey(key: string) {
+  try {
+    await AsyncStorage.removeItem(key);
+  } catch (error) {
+    console.warn(`[storage] 删除 ${key} 失败`, error);
+  }
 }
 
 function createId(): string {
@@ -167,15 +224,44 @@ function readAiRecipes(value: unknown): Recipe[] {
   );
 }
 
+/**
+ * 磁盘上的食库同样是**不可信数据**：用户自己敲的名字，加上「冰箱」时代留下的分类。
+ *
+ * **归一化，不丢弃**：`category` 不在九类里（旧值、手改的、以后删掉的类）一律归到 `other` —— 少一条
+ * 食材是用户看得见的损失，而分类只影响分组标题和 prompt 里的一句提示。名字不是字符串的条目也保留
+ * （写成「未命名食材」）、归到「其他」，让用户在界面上自己处理。两个例外：整个值不是数组，以及数组
+ * 里的元素根本不是对象 —— 那些连一行都渲染不出来，只能丢。
+ *
+ * id 缺失时按序号补一个：食库的删除与列表 key 都靠 id，没有 id 的条目点「删除」会删错。
+ *
+ * **导出**是为了让 harness 能直接对着它下断言（「一条不丢、未知归其他」这条要能复现）。
+ */
+export function migratePantryItems(value: unknown): PantryItem[] {
+  if (!Array.isArray(value)) return [];
+  const known = new Set<string>(CATEGORY_ORDER);
+  return value.filter(isRecord).map((entry, index) => ({
+    id: typeof entry.id === 'string' && entry.id.length > 0 ? entry.id : `legacy-${index}`,
+    name: typeof entry.name === 'string' && entry.name.trim().length > 0 ? entry.name : '未命名食材',
+    amount: typeof entry.amount === 'string' ? entry.amount : '',
+    category:
+      typeof entry.category === 'string' && known.has(entry.category)
+        ? (entry.category as IngredientCategory)
+        : 'other',
+    addedAt: typeof entry.addedAt === 'number' && Number.isFinite(entry.addedAt) ? entry.addedAt : 0,
+  }));
+}
+
 export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
   const [profile, setProfile] = useState<Profile>(DEFAULT_PROFILE);
-  const [fridge, setFridge] = useState<FridgeItem[]>([]);
+  const [pantry, setPantry] = useState<PantryItem[]>([]);
   const [plan, setPlan] = useState<DayPlan | null>(null);
   /** Normalized names of the shopping lines the user has already bought, for today. */
   const [bought, setBought] = useState<string[]>([]);
   const [aiKey, setAiKey] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
+  /** 正在发第几次请求（1 或 2）。只会影响忙碌卡上的那句话。 */
+  const [aiAttempt, setAiAttempt] = useState(1);
   const [aiError, setAiError] = useState<AiFailure | null>(null);
   const [aiTest, setAiTest] = useState<AiTestState>({ state: 'idle' });
 
@@ -188,6 +274,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
    * 成功、回退、用户主动切回本地规则都清零。
    */
   const aiFailures = useRef(0);
+  /**
+   * 最近几天做过的菜。**用 ref 不用 state**：它只在「按下生成」时被读进 prompt，进 state 会把它塞进
+   * `generateWithAi` 的依赖链、并在每次记录时触发一次无谓的重渲染。与 `aiFailures` 同一个套路。
+   */
+  const dishHistory = useRef<DishHistoryEntry[]>([]);
 
   /**
    * **唯一**写 `plan` 的地方。
@@ -204,30 +295,64 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     setCustomRecipes(nextAiRecipes);
     setPlan(nextPlan);
     writeJson(KEYS.aiRecipes, { date: nextPlan.date, recipes: nextAiRecipes } satisfies StoredAiRecipes);
+
+    // 记下今天这份菜单的菜名。**必须在 `setCustomRecipes` 之后**：当天的 AI 菜谱只能靠刚登记进
+    // registry 的 id 解析出名字。本地菜单也记 —— 它们确实上了桌；同一天反复生成会替换当天那条，
+    // 于是「重新生成」也会避开刚排过的那批（见 `history.recordDishes`）。
+    const names = MEAL_SLOTS.flatMap((slot) => nextPlan.meals[slot])
+      .map((id) => getRecipe(id)?.name)
+      .filter((name): name is string => typeof name === 'string');
+    const next = recordDishes(dishHistory.current, nextPlan.date, names);
+    dishHistory.current = next;
+    writeJson(KEYS.dishHistory, { entries: next } satisfies StoredDishHistory);
   }, []);
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      const [storedProfile, storedFridge, storedPlan, storedChecks, storedAiKey, storedAiRecipes] =
-        await Promise.all([
-          // `unknown` on purpose: what is on disk may be the v1 single-person shape, and only
-          // `migrateProfile` decides what it means. Claiming `Profile` here would be a lie that
-          // `strict` could not catch, and the v1 fields would flow in as `undefined`.
-          readJson<unknown>(KEYS.profile),
-          readJson<FridgeItem[]>(KEYS.fridge),
-          readJson<DayPlan>(KEYS.plan),
-          readJson<StoredChecks>(KEYS.shopping),
-          readJson<string>(KEYS.aiKey),
-          readJson<unknown>(KEYS.aiRecipes),
-        ]);
+      const [
+        storedProfile,
+        storedPantry,
+        storedLegacyPantry,
+        storedPlan,
+        storedChecks,
+        storedAiKey,
+        storedAiRecipes,
+        storedHistory,
+      ] = await Promise.all([
+        // `unknown` on purpose: what is on disk may be the v1 single-person shape, and only
+        // `migrateProfile` decides what it means. Claiming `Profile` here would be a lie that
+        // `strict` could not catch, and the v1 fields would flow in as `undefined`.
+        readJson<unknown>(KEYS.profile),
+        // `unknown` on purpose, same reason as the profile: what is on disk may be the 「冰箱」 era
+        // shape (unknown categories, missing fields), and only `migratePantryItems` decides.
+        readJson<unknown>(KEYS.pantry),
+        readJson<unknown>(LEGACY_KEYS.pantry),
+        readJson<DayPlan>(KEYS.plan),
+        readJson<StoredChecks>(KEYS.shopping),
+        readJson<string>(KEYS.aiKey),
+        readJson<unknown>(KEYS.aiRecipes),
+        readJson<unknown>(KEYS.dishHistory),
+      ]);
       if (cancelled) return;
 
       // Read in place, same key: a v1 profile becomes a one-member household without the user
       // doing anything, and the persist effect below rewrites it in the new shape.
       const nextProfile = storedProfile === null ? DEFAULT_PROFILE : migrateProfile(storedProfile);
-      const nextFridge = storedFridge ?? [];
+
+      // 「冰箱」→「食库」搬键，**一次性**：新键优先；新键是空的才读旧键。顺序是「先写新的、确认成功、
+      // 再删旧的」—— 反过来（先删）中间被杀进程就真的丢数据，而这个顺序下最坏只是两处都有同一份。
+      let nextPantry = migratePantryItems(storedPantry);
+      if (storedPantry === null && storedLegacyPantry !== null) {
+        nextPantry = migratePantryItems(storedLegacyPantry);
+        if (await writeJsonNow(KEYS.pantry, nextPantry)) await dropKey(LEGACY_KEYS.pantry);
+        if (cancelled) return;
+      } else if (storedLegacyPantry !== null) {
+        // 新键已经有数据，旧键只是上次没删干净的残留：清掉，免得它哪天把删过的食材带回来。
+        await dropKey(LEGACY_KEYS.pantry);
+        if (cancelled) return;
+      }
       // A stored plan is only valid on the day it was generated for.
       const isToday = storedPlan !== null && storedPlan.date === todayKey();
       // Same rule for the checks. Yesterday's 「已买」 says nothing about today's shopping, and
@@ -247,14 +372,35 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       const resolvable =
         isToday &&
         storedMeals !== null &&
-        MEAL_SLOTS.map((slot) => storedMeals[slot]).every(
-          (id) => typeof id === 'string' && getRecipe(id) !== undefined,
-        );
+        // 每餐是一个**非空数组**，且每个 id 都解析得出来。`Array.isArray` 那一层不能省：v1 的
+        // 字符串形状 、或任何坏数据都会让下面的 `.every` 直接抛异常（白屏），而不是走重算。
+        MEAL_SLOTS.every((slot) => {
+          const ids = storedMeals[slot];
+          return (
+            Array.isArray(ids) &&
+            ids.length > 0 &&
+            ids.every((id) => typeof id === 'string' && getRecipe(id) !== undefined)
+          );
+        });
 
-      const nextPlan = resolvable ? storedPlan : generatePlan(nextProfile, nextFridge, storedPlan);
+      // `notes` 与 plan 一起落盘，同样是不可信数据（手改过的存储、以后改过的形状）：按 `sanitizeNotes`
+      // 洗一遍（非数组当没有、非字符串跳过、超长截断）。空数组就**把这个键删掉**，别留一个 `notes: []`
+      // —— 今日页按「有没有 notes」决定显不显示那张卡，留着空数组就要多一处判空。
+      let nextPlan: DayPlan;
+      if (resolvable && storedPlan !== null) {
+        const notes = sanitizeNotes(storedPlan.notes);
+        nextPlan = { ...storedPlan };
+        if (notes.length > 0) nextPlan.notes = notes;
+        else delete nextPlan.notes;
+      } else {
+        nextPlan = generatePlan(nextProfile, nextPantry, storedPlan);
+      }
+
+      // 历史也当不可信数据读；顺手剪到最近 3 天（跨天之后第一次生成前就先把过期的丢掉）。
+      dishHistory.current = pruneHistory(readHistory(storedHistory), todayKey());
 
       setProfile(nextProfile);
-      setFridge(nextFridge);
+      setPantry(nextPantry);
       // 复验失败时**不发 AI 请求**：那会在启动时用一份还没落定的状态拼 prompt，而且在用户没点
       // 任何东西的时候花钱。重算成本地菜单，想再要 AI 的手动点一下即可（见交付说明里的取舍）。
       publishPlan(nextPlan, resolvable ? aiRecipes : []);
@@ -274,8 +420,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   }, [hydrated, profile]);
 
   useEffect(() => {
-    if (hydrated) writeJson(KEYS.fridge, fridge);
-  }, [hydrated, fridge]);
+    if (hydrated) writeJson(KEYS.pantry, pantry);
+  }, [hydrated, pantry]);
 
   useEffect(() => {
     if (hydrated && plan) writeJson(KEYS.plan, plan);
@@ -295,7 +441,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   // looped the app into "Too many re-renders": a render-phase update re-runs the hooks, and with
   // `experiments.reactCompiler` on, the memoized list came back as a new object on every pass, so
   // the guard never matched and React hit its re-render limit.
-  const missing = useMemo(() => buildShoppingList(plan, fridge, profile), [plan, fridge, profile]);
+  const missing = useMemo(() => buildShoppingList(plan, pantry, profile), [plan, pantry, profile]);
   const shoppingList = useMemo(
     () => missing.map((line) => ({ ...line, bought: bought.includes(line.key) })),
     [missing, bought],
@@ -305,15 +451,28 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     [shoppingList],
   );
 
-  const addFridgeItem = useCallback((input: NewFridgeItem) => {
-    setFridge((current) => [{ id: createId(), addedAt: Date.now(), ...input }, ...current]);
+  const addPantryItem = useCallback((input: NewPantryItem) => {
+    setPantry((current) => [{ id: createId(), addedAt: Date.now(), ...input }, ...current]);
   }, []);
 
-  const removeFridgeItem = useCallback((id: string) => {
-    setFridge((current) => current.filter((item) => item.id !== id));
+  const removePantryItem = useCallback((id: string) => {
+    setPantry((current) => current.filter((item) => item.id !== id));
   }, []);
 
-  const clearFridge = useCallback(() => setFridge([]), []);
+  const clearPantry = useCallback(() => setPantry([]), []);
+
+  /**
+   * 顶掉在途的 AI 请求：本地重排与保存画像都要先叫停它。
+   *
+   * 不叫停的话，迟到的 AI 结果回来时 `aiRunId` 还没变，`generateWithAi` 会照常 `publishPlan` —— 把用户
+   * 刚用本地规则排好的菜单盖掉，而这一步没有任何界面痕迹（菜单「自己变了」）。与 `cancelAiGeneration`
+   * 是同一套写法，只差一个 `setAiBusy(false)`：那两个入口自己会把界面切回本地状态。
+   */
+  const dropAiRun = useCallback(() => {
+    aiAbort.current?.abort();
+    aiAbort.current = null;
+    aiRunId.current += 1;
+  }, []);
 
   // Saving the form also refreshes today's menu, so the new members and preferences take
   // effect in one tap instead of leaving a stale plan on the 今日 tab.
@@ -324,26 +483,42 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const saveProfile = useCallback(
     (next: Omit<Profile, 'savedAt'>) => {
       const saved: Profile = { ...next, savedAt: Date.now() };
+      dropAiRun();
+      setAiBusy(false);
+      setAiAttempt(1);
+      // 菜单整个换了，上一份的错误卡不再描述当前状态（比如「已回退本地规则」现在成了废话）。
+      setAiError(null);
       setProfile(saved);
-      publishPlan(generatePlan(saved, fridge, plan), []);
+      publishPlan(generatePlan(saved, pantry, plan), []);
     },
-    [fridge, plan, publishPlan],
+    [dropAiRun, pantry, plan, publishPlan],
   );
 
   /**
    * 本地规则重排今天的三餐。这是「改用本地规则」那个出口，也是没配 Key 时今日页的按钮。
    */
   const regeneratePlan = useCallback(() => {
+    dropAiRun();
     aiFailures.current = 0;
     setAiError(null);
-    publishPlan(generatePlan(profile, fridge, plan), []);
-  }, [profile, fridge, plan, publishPlan]);
+    setAiBusy(false);
+    setAiAttempt(1);
+    publishPlan(generatePlan(profile, pantry, plan), []);
+  }, [dropAiRun, profile, pantry, plan, publishPlan]);
 
   /**
-   * 一次 AI 生成尝试：**只发一次请求**，没有隐藏重试。
+   * 一次 AI 生成：**最多两次请求**。
    *
-   * 每次点按钮 = 一次请求，失败就是失败。所以「连续失败 2 次」在界面上一说就明白 —— 藏着重试的话
-   * 这句话就没法解释了。
+   * 第一次不合格（schema/taboo/parse/repeat）时把失败原因原样讲给模型听、再问一次 —— 这几类失败大多
+   * 只是它没被告知「哪里不行」。网络、超时、Key、余额、限流**不重试**：当场重发只会再等一次 60 秒，
+   * 或者再撞同一堵墙（判据在 `ai.shouldRetry`）。
+   *
+   * 失败次数是**按每次请求**累计的，所以一次点击里两次都不合格 ＝ 连续失败 2 次 ＝ 回退本地规则，与
+   * 界面上那句话对得上（见 `AI_ATTEMPTS`）。
+   *
+   * 整个函数体包在 try/catch/finally 里：`setAiBusy(false)` 只在 `finally` 出现一次，所以**没有任何
+   * 一条路径**能把界面留在「转圈 + 按钮按不动」上（之前 `setAiBusy(false)` 夹在中间，任何一个同步异常
+   * 都会跳过去，而 `regenerateToday` 是 `void generateWithAi()`，rejection 被吞掉）。
    */
   const generateWithAi = useCallback(async () => {
     if (!aiKey) return;
@@ -353,34 +528,66 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     const controller = new AbortController();
     aiAbort.current = controller;
     setAiBusy(true);
+    setAiAttempt(1);
     setAiError(null);
 
     const date = todayKey();
-    // 上一次的失败原因只在 schema/taboo/parse 时喂回去（见 `ai.retryCorrection`）：网络与 Key 的问题
-    // 重说一遍没有用，只会占掉上下文。
-    const correction = retryCorrection(aiError);
-    const call = await callDeepSeek(
-      aiKey,
-      buildMenuPrompt(profile, fridge, date, { correction }),
-      controller.signal,
-    );
 
-    // 被「取消」或被后一次点击顶掉：这一次的结果直接丢掉，不动菜单。
-    if (aiRunId.current !== runId) return;
-    aiAbort.current = null;
-    setAiBusy(false);
+    try {
+      // 上一次的失败原因只在 schema/taboo/parse 时喂回去（见 `ai.retryCorrection`）：网络与 Key 的问题
+      // 重说一遍没有用，只会占掉上下文。第一次仍带着上一次点击留下的那份，与旧行为一致。
+      let correction = retryCorrection(aiError);
+      let failed: AiFailure | null = null;
 
-    const parsed = call.ok ? parseMenu(call.content, profile, date, fridge) : null;
-    const failed: AiFailure | null = !call.ok ? call.failure : parsed && !parsed.ok ? parsed.failure : null;
+      for (let attempt = 1; attempt <= AI_ATTEMPTS; attempt += 1) {
+        // 被「取消」或被后一次点击顶掉：这一次的结果直接丢掉，不动菜单。
+        if (aiRunId.current !== runId) return;
+        if (attempt > 1) setAiAttempt(attempt);
 
-    if (failed) {
-      if (failed.kind === 'cancelled') return;
-      aiFailures.current += 1;
+        const call = await callDeepSeek(
+          aiKey,
+          // 历史从 ref 读，不进依赖数组；营养目标由 `buildMenuPrompt` 自己从 `profile` 现算。
+          buildMenuPrompt(profile, pantry, date, { correction, history: dishHistory.current }),
+          controller.signal,
+        );
+        if (aiRunId.current !== runId) return;
+
+        const parsed = call.ok ? parseMenu(call.content, profile, date, pantry) : null;
+        failed = !call.ok ? call.failure : parsed && !parsed.ok ? parsed.failure : null;
+
+        if (!failed) {
+          if (!parsed || !parsed.ok) return;
+          // 归一化时的让步（补主食、按生食处理、缺货对不上…）：打一行日志，不影响可用性。
+          for (const warning of parsed.menu.warnings) console.warn(`[ai] ${warning}`);
+
+          const nextPlan = menuPlan(parsed.menu.recipes, date, Date.now(), parsed.menu.notes);
+          if (!nextPlan) {
+            setAiError(failure('schema', '三餐不齐，已丢弃'));
+            return;
+          }
+
+          aiFailures.current = 0;
+          publishPlan(nextPlan, parsed.menu.recipes);
+          return;
+        }
+
+        // 取消：不计失败、不弹错误卡、不动菜单 —— 用户按的就是「停」。
+        if (failed.kind === 'cancelled') return;
+
+        aiFailures.current += 1;
+        if (attempt < AI_ATTEMPTS && shouldRetry(failed)) {
+          correction = retryCorrection(failed);
+          continue;
+        }
+        break;
+      }
+
+      if (!failed) return;
       // 连续失败到阈值，且当前这份菜单确实是 AI 排的 → 换回本地规则。
-      // 已经是本地菜单时不动它：回退不该把用户正在看的本地菜单重新摇一遍（那会凭空换掉三道菜）。
+      // 已经是本地菜单时不动它：回退不该把用户正在看的本地菜单重新摇一遍（那会凭空换掉三餐的安排）。
       if (aiFailures.current >= AI_FAILURE_LIMIT && plan?.source === 'ai') {
         aiFailures.current = 0;
-        publishPlan(generatePlan(profile, fridge, plan), []);
+        publishPlan(generatePlan(profile, pantry, plan), []);
         setAiError({
           ...failed,
           message: `${failed.message}；AI 连续失败 ${AI_FAILURE_LIMIT} 次，已回退本地规则`,
@@ -388,22 +595,25 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         return;
       }
       setAiError(failed);
-      return;
+    } catch {
+      // 兜底：没预料到的异常也落成一张可重试的错误卡，不留「转圈到永远」。
+      // **不打 exception 本身**：它的 message 里可能带着请求 URL 之类的上下文（见 `deepseek` 顶部
+      // 那条铁律），这里只留一句固定的、不含任何内容的日志。
+      console.warn('[ai] 生成过程抛出未预料的异常，已按 unknown 处理');
+      // 被取消或已被新的一次顶掉时什么都不做：那一次不该再往界面上写任何东西。
+      if (aiRunId.current === runId) {
+        aiFailures.current += 1;
+        setAiError(failure('unknown'));
+      }
+    } finally {
+      // 只有「还是当前这一次」才收尾：被顶掉的那一次不该去动界面状态（新的一次正忙着自己的）。
+      if (aiRunId.current === runId) {
+        aiAbort.current = null;
+        setAiAttempt(1);
+        setAiBusy(false);
+      }
     }
-
-    if (!parsed || !parsed.ok) return;
-    // 归一化时的让步（补主食、按生食处理、缺货对不上…）：打一行日志，不影响可用性。
-    for (const warning of parsed.menu.warnings) console.warn(`[ai] ${warning}`);
-
-    const nextPlan = menuPlan(parsed.menu.recipes, date);
-    if (!nextPlan) {
-      setAiError(failure('schema', '三餐不齐，已丢弃'));
-      return;
-    }
-
-    aiFailures.current = 0;
-    publishPlan(nextPlan, parsed.menu.recipes);
-  }, [aiKey, aiError, profile, fridge, plan, publishPlan]);
+  }, [aiKey, aiError, profile, pantry, plan, publishPlan]);
 
   const regenerateToday = useCallback(() => {
     if (aiKey) {
@@ -414,11 +624,13 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   }, [aiKey, generateWithAi, regeneratePlan]);
 
   const cancelAiGeneration = useCallback(() => {
-    aiAbort.current?.abort();
-    aiAbort.current = null;
-    aiRunId.current += 1;
+    // 与 `dropAiRun` 同一套（abort + 换 runId）：`runId` 变了之后，就算这一次的响应已经在路上，
+    // `generateWithAi` 里那两个 `aiRunId.current !== runId` 也会把它丢掉 —— 自动重试的第二次请求
+    // 因此同样中止得掉。
+    dropAiRun();
+    setAiAttempt(1);
     setAiBusy(false);
-  }, []);
+  }, [dropAiRun]);
 
   /**
    * 保存密钥。**空串什么都不做**。
@@ -486,17 +698,17 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
-  // 「缺」 is defined as 「冰箱里没有」, so writing these names in removes them from the list, and the
+  // 「缺」 is defined as 「食库里没有」, so writing these names in removes them from the list, and the
   // prune above drops their checks — no second bookkeeping step is needed here.
-  const addBoughtToFridge = useCallback(() => {
+  const addBoughtToPantry = useCallback(() => {
     const picked = shoppingList.filter((line) => line.bought);
     if (picked.length === 0) return;
-    setFridge((current) => [
+    setPantry((current) => [
       ...picked.map((line) => ({
         id: createId(),
         addedAt: Date.now(),
         name: line.name,
-        amount: fridgeAmountLabel(line),
+        amount: pantryAmountLabel(line),
         category: line.category,
       })),
       ...current,
@@ -507,19 +719,20 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     () => ({
       hydrated,
       profile,
-      fridge,
+      pantry,
       plan,
-      addFridgeItem,
-      removeFridgeItem,
-      clearFridge,
+      addPantryItem,
+      removePantryItem,
+      clearPantry,
       saveProfile,
       shoppingList,
       shoppingPending,
       toggleBought,
-      addBoughtToFridge,
+      addBoughtToPantry,
       aiConfigured: aiKey !== null,
       aiKeyTail: aiKey === null ? null : aiKey.slice(-4),
       aiBusy,
+      aiAttempt,
       aiError,
       aiTest,
       regenerateToday,
@@ -532,18 +745,19 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     [
       hydrated,
       profile,
-      fridge,
+      pantry,
       plan,
-      addFridgeItem,
-      removeFridgeItem,
-      clearFridge,
+      addPantryItem,
+      removePantryItem,
+      clearPantry,
       saveProfile,
       shoppingList,
       shoppingPending,
       toggleBought,
-      addBoughtToFridge,
+      addBoughtToPantry,
       aiKey,
       aiBusy,
+      aiAttempt,
       aiError,
       aiTest,
       regenerateToday,

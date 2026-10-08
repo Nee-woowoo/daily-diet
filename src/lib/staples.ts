@@ -7,6 +7,7 @@ import {
   portionLabel,
 } from './members';
 import { getRecipe, scaleAmount } from './recipes';
+import type { Macros } from './nutrition';
 import type {
   DayPlan,
   Goal,
@@ -21,7 +22,7 @@ import type {
  * The 主食 suggestion for today's menu, derived from the plan the 今日 tab is rendering.
  *
  * Pure on purpose: no storage, no React, and no import of `planner.ts` — a suggested bowl of rice
- * must never take part in fridge matching or the 采购清单 (see the note on `Recipe.staple`).
+ * must never take part in pantry matching or the 采购清单 (see the note on `Recipe.staple`).
  */
 
 /** The multiplier on a recipe's base amount, applied per member — only to the 另配 staples. */
@@ -53,48 +54,83 @@ export interface StapleSuggestion {
 }
 
 export interface StapleLine extends StapleSuggestion {
+  /** 稳定的 React key：`${slot}-${组成部分下标}`。一餐可以有多行（多个组成部分各自的主食）。 */
+  key: string;
   slot: MealSlot;
+  /**
+   * 这一行对**每人份标准份**贡献的宏量。`fromDish` 行是零 —— 早餐的主食本来就是菜里的主料，它的
+   * 能量与宏量都已经在菜里了（见 `draftFor`）。
+   */
+  contribPerServing: Macros;
+  /** 同上，但按全家份数与该成员的目标系数换算过。 */
+  contribHousehold: Macros;
 }
 
 export interface StaplePlan {
-  /** 早餐 → 午餐 → 晚餐, at most one entry per meal. */
+  /** 早餐 → 午餐 → 晚餐。一餐最多一行**另配**的主食（同名去重），`fromDish` 行可以有多行。 */
   lines: StapleLine[];
   /**
-   * Per-**标准份** energy of the staples the plan adds *on top of* the dishes — only the lines where
-   * `fromDish` is false. A breakfast's staple is an ingredient of its recipe, so its energy is
-   * already inside `Recipe.calories`; counting it here would double-count breakfast every day.
+   * Per-**标准份** macros of the staples the plan adds *on top of* the dishes — only the lines where
+   * `fromDish` is false. A breakfast's staple is an ingredient of its recipe, so it is already inside
+   * `Recipe.calories`; counting it here would double-count breakfast every day.
    *
    * 标准份（基础量、不带任何系数）是有意的：一家人的目标不同时，「每人」系数根本不存在，所以这一行只
-   * 报标准份，全家的数字交给 `addedKcalHousehold`。
+   * 报标准份，全家的数字交给 `addedMacrosHousehold`。
    */
-  addedKcalPerServing: number;
+  addedMacrosPerServing: Macros;
   /** The same staples for the whole household, at each member's own 份数 and goal factor. */
-  addedKcalHousehold: number;
+  addedMacrosHousehold: Macros;
+}
+
+/** 每次都新建一个对象：绝不把一个全零的模块级常量交出去 —— 它一旦被写回就会污染整个会话。 */
+function zeroMacros(): Macros {
+  return { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 };
+}
+
+function sumMacros(a: Macros, b: Macros): Macros {
+  return {
+    kcal: a.kcal + b.kcal,
+    protein: a.protein + b.protein,
+    carbs: a.carbs + b.carbs,
+    fat: a.fat + b.fat,
+    fiber: a.fiber + b.fiber,
+  };
 }
 
 /**
- * Rough energy per 100 g of the staple *as the recipe uses it*: cooked for 白米饭/杂粮饭/糙米饭/
- * 小米粥, dry for 小米/挂面/全麦吐司/即食燕麦片. Estimates for orientation only — the UI rounds to
- * the nearest 10 and says 约. A name missing here falls back to a generic cooked grain.
+ * Rough macros per 100 g of the staple *as the recipe uses it*: cooked for 白米饭/杂粮饭/糙米饭/
+ * 小米粥, dry for 小米/挂面/全麦吐司/即食燕麦片. Estimates for orientation only — the UI rounds and
+ * says 约. A name missing here falls back to a generic cooked grain.
+ *
+ * `kcal` 与上一版的 `KCAL_PER_100G` 逐字相同（那是已经显示给用户看过的数），三个新数字是同一份
+ * 食物的成分表，两者大致自洽（`4×碳水 + 4×蛋白质 + 9×脂肪` 与千卡同量级）。
  */
-const KCAL_PER_100G: Partial<Record<string, number>> = {
-  白米饭: 116,
-  杂粮饭: 110,
-  糙米饭: 112,
-  小米粥: 46,
-  小米: 361,
-  挂面: 350,
-  全麦吐司: 250,
-  即食燕麦片: 380,
+const STAPLE_PER_100G: Partial<Record<string, Macros>> = {
+  白米饭: { kcal: 116, protein: 2.6, carbs: 25.9, fat: 0.3, fiber: 0.3 },
+  杂粮饭: { kcal: 110, protein: 3.5, carbs: 24, fat: 0.8, fiber: 2.5 },
+  糙米饭: { kcal: 112, protein: 2.6, carbs: 23, fat: 0.9, fiber: 1.8 },
+  小米粥: { kcal: 46, protein: 1.4, carbs: 9.7, fat: 0.4, fiber: 0.2 },
+  小米: { kcal: 361, protein: 9, carbs: 75, fat: 3.1, fiber: 1.6 },
+  挂面: { kcal: 350, protein: 10, carbs: 74, fat: 0.8, fiber: 1.5 },
+  全麦吐司: { kcal: 250, protein: 9, carbs: 43, fat: 3.4, fiber: 6 },
+  即食燕麦片: { kcal: 380, protein: 13, carbs: 66, fat: 7, fiber: 10 },
 };
-const DEFAULT_KCAL_PER_100G = 120;
+const DEFAULT_STAPLE_PER_100G: Macros = { kcal: 120, protein: 2.6, carbs: 26, fat: 0.5, fiber: 0.5 };
 
-/** Staples counted in 片 rather than weighed; a unit missing here contributes 0 kcal. */
+/** Staples counted in 片 rather than weighed; a unit missing here contributes nothing. */
 const PIECE_GRAMS: Partial<Record<string, number>> = { 全麦吐司: 35 };
 
-function stapleKcal(name: string, amount: number, unit: IngredientUnit): number {
+export function stapleMacros(name: string, amount: number, unit: IngredientUnit): Macros {
   const grams = unit === 'g' || unit === 'ml' ? amount : amount * (PIECE_GRAMS[name] ?? 0);
-  return (grams * (KCAL_PER_100G[name] ?? DEFAULT_KCAL_PER_100G)) / 100;
+  const per100 = STAPLE_PER_100G[name] ?? DEFAULT_STAPLE_PER_100G;
+  const factor = grams / 100;
+  return {
+    kcal: per100.kcal * factor,
+    protein: per100.protein * factor,
+    carbs: per100.carbs * factor,
+    fat: per100.fat * factor,
+    fiber: per100.fiber * factor,
+  };
 }
 
 /**
@@ -122,10 +158,10 @@ export function stapleOf(recipe: Recipe): StapleServing | undefined {
 
 interface StapleDraft {
   suggestion: StapleSuggestion;
-  /** Energy of one 标准份 (the recipe's own base amount). */
-  kcalStandard: number;
-  /** Energy of the household total, i.e. of `suggestion.amount`. */
-  kcalHousehold: number;
+  /** Macros of one 标准份 (the recipe's own base amount). */
+  macrosStandard: Macros;
+  /** Macros of the household total, i.e. of `suggestion.amount`. */
+  macrosHousehold: Macros;
 }
 
 /**
@@ -167,8 +203,8 @@ function draftFor(recipe: Recipe, profile: Profile): StapleDraft | undefined {
       unit: staple.unit,
       fromDish,
     },
-    kcalStandard: stapleKcal(name, staple.amount, staple.unit),
-    kcalHousehold: stapleKcal(name, household, staple.unit),
+    macrosStandard: stapleMacros(name, staple.amount, staple.unit),
+    macrosHousehold: stapleMacros(name, household, staple.unit),
   };
 }
 
@@ -178,28 +214,47 @@ export function stapleSuggestion(recipe: Recipe, profile: Profile): StapleSugges
 }
 
 export function buildStaplePlan(plan: DayPlan | null, profile: Profile): StaplePlan {
-  if (!plan) return { lines: [], addedKcalPerServing: 0, addedKcalHousehold: 0 };
-
-  const lines: StapleLine[] = [];
-  let addedKcalPerServing = 0;
-  let addedKcalHousehold = 0;
-
-  for (const slot of MEAL_SLOTS) {
-    const recipe = getRecipe(plan.meals[slot]);
-    // Mirrors the 今日 tab: an id the current recipe set no longer knows is simply skipped.
-    if (!recipe) continue;
-
-    const draft = draftFor(recipe, profile);
-    if (!draft) continue;
-
-    lines.push({ slot, ...draft.suggestion });
-    if (!draft.suggestion.fromDish) {
-      addedKcalPerServing += draft.kcalStandard;
-      addedKcalHousehold += draft.kcalHousehold;
-    }
+  if (!plan) {
+    return { lines: [], addedMacrosPerServing: zeroMacros(), addedMacrosHousehold: zeroMacros() };
   }
 
-  return { lines, addedKcalPerServing, addedKcalHousehold };
+  const lines: StapleLine[] = [];
+  let addedMacrosPerServing = zeroMacros();
+  let addedMacrosHousehold = zeroMacros();
+
+  for (const slot of MEAL_SLOTS) {
+    // 一餐只留一碗「另配」的主食：两个组成部分各写一碗饭是数据错误，不该在卡片上变成两碗、在热量上
+    // 变成两倍。`ai.normalizeMenu` 已经在校验层挡了一道，这里是第二道，够得着所有调用方。
+    const seen = new Set<string>();
+    plan.meals[slot].forEach((id, index) => {
+      // Mirrors the 今日 tab: an id the current recipe set no longer knows is simply skipped.
+      const recipe = getRecipe(id);
+      if (!recipe) return;
+
+      const draft = draftFor(recipe, profile);
+      if (!draft) return;
+
+      const { suggestion } = draft;
+      if (!suggestion.fromDish) {
+        if (seen.has(suggestion.name)) return;
+        seen.add(suggestion.name);
+      }
+
+      lines.push({
+        key: `${slot}-${index}`,
+        slot,
+        ...suggestion,
+        contribPerServing: suggestion.fromDish ? zeroMacros() : draft.macrosStandard,
+        contribHousehold: suggestion.fromDish ? zeroMacros() : draft.macrosHousehold,
+      });
+      if (!suggestion.fromDish) {
+        addedMacrosPerServing = sumMacros(addedMacrosPerServing, draft.macrosStandard);
+        addedMacrosHousehold = sumMacros(addedMacrosHousehold, draft.macrosHousehold);
+      }
+    });
+  }
+
+  return { lines, addedMacrosPerServing, addedMacrosHousehold };
 }
 
 /** The densities above are good to a few dozen calories, so the UI only shows the nearest 10. */

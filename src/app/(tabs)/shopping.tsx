@@ -19,7 +19,7 @@ import { useAppStore } from '@/lib/storage';
  * two screens can never disagree.
  */
 export default function ShoppingScreen() {
-  const { shoppingList, toggleBought, addBoughtToFridge } = useAppStore();
+  const { shoppingList, toggleBought, addBoughtToPantry } = useAppStore();
 
   const boughtCount = shoppingList.filter((line) => line.bought).length;
 
@@ -37,12 +37,12 @@ export default function ShoppingScreen() {
           <>
             <ThemedText type="caption" themeColor="textSecondary">
               {boughtCount > 0
-                ? `已勾选 ${boughtCount} / ${shoppingList.length} 样，加进冰箱后自动从清单移除`
+                ? `已勾选 ${boughtCount} / ${shoppingList.length} 样，放进食库后自动从清单移除`
                 : `共 ${shoppingList.length} 样，点一下代表已经买到`}
             </ThemedText>
             <PrimaryButton
-              label={boughtCount > 0 ? `将 ${boughtCount} 样加进冰箱` : '勾选买到的食材'}
-              onPress={addBoughtToFridge}
+              label={boughtCount > 0 ? `将 ${boughtCount} 样放进食库` : '勾选买到的食材'}
+              onPress={addBoughtToPantry}
               disabled={boughtCount === 0}
             />
           </>
@@ -51,9 +51,9 @@ export default function ShoppingScreen() {
       {groups.length === 0 ? (
         <EmptyState
           title="今天不用买菜"
-          description="今日菜单的食材冰箱里都有，可以直接开做。"
-          actionLabel="去冰箱看看"
-          onAction={() => router.navigate('/fridge')}
+          description="今日菜单的食材食库里都有，可以直接开做。"
+          actionLabel="去食库看看"
+          onAction={() => router.navigate('/pantry')}
         />
       ) : null}
 

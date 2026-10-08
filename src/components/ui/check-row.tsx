@@ -8,7 +8,7 @@ import { useTheme } from '@/hooks/use-theme';
  * A tap-to-toggle row for a checklist: glyph on the left, name and detail in the middle.
  *
  * Kept separate from `CardRow` on purpose. `CardRow` is a label/value row, and two other screens
- * (冰箱, 我的) put buttons in its trailing slot — turning that row's root into a Pressable would
+ * (食库, 我的) put buttons in its trailing slot — turning that row's root into a Pressable would
  * change how those nested buttons negotiate the touch responder, for no gain here. The checked
  * glyph (`✓` / `○`) is the same unicode pair `OptionCard` uses.
  */

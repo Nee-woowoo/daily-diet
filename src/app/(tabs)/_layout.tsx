@@ -4,7 +4,7 @@ import { Colors } from '@/constants/theme';
 import { useAppStore } from '@/lib/storage';
 
 /**
- * Five native tabs, in this declaration order: 今日 / 购物 / 冰箱 / 录入 / 我的.
+ * Five native tabs, in this declaration order: 今日 / 购物 / 食库 / 录入 / 我的.
  *
  * Icons come from the platform itself — SF Symbols on iOS via `sf`, Material Symbols on
  * Android via `md` — so no icon package or image assets are needed.
@@ -42,8 +42,10 @@ export default function TabsLayout() {
         ) : null}
       </NativeTabs.Trigger>
 
-      <NativeTabs.Trigger name="fridge">
-        <NativeTabs.Trigger.Label>冰箱</NativeTabs.Trigger.Label>
+      {/* 路由名从 `fridge` 改成了 `pantry`（家里食材的总库存，不只是冰箱里那些）—— 文件名也跟着改了，
+          见 `pantry.tsx`。图标仍用冰箱/厨房那一套：它是这一页最容易认出来的符号。 */}
+      <NativeTabs.Trigger name="pantry">
+        <NativeTabs.Trigger.Label>食库</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
           sf={{ default: 'refrigerator', selected: 'refrigerator.fill' }}
           md="kitchen"

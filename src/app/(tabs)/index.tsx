@@ -1,5 +1,5 @@
-import { router } from 'expo-router';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { router, type ErrorBoundaryProps } from 'expo-router';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { PlainButton, PrimaryButton } from '@/components/ui/button';
@@ -9,13 +9,14 @@ import { Screen } from '@/components/ui/screen';
 import { Spacing } from '@/constants/theme';
 import { AI_DISCLAIMER, isAiRecipe, NO_KEY_HINT } from '@/lib/ai';
 import { careLine, excludedRecipes } from '@/lib/advice';
-import { MEAL_SLOT_LABELS, MEAL_SLOTS, OIL_LEVEL_LABELS } from '@/lib/labels';
 import {
-  householdLabel,
-  householdPortions,
-  householdPortionsLabel,
-  needsMigrationCheck,
-} from '@/lib/members';
+  MEAL_SLOT_LABELS,
+  MEAL_SLOTS,
+  OIL_LEVEL_LABELS,
+  mealRoleLabel,
+} from '@/lib/labels';
+import { householdLabel, householdPortionsLabel, needsMigrationCheck } from '@/lib/members';
+import { achievement, dayNutrition, mealTotals, nutritionTarget } from '@/lib/nutrition';
 import { matchRecipe, todayLabel } from '@/lib/planner';
 import { getRecipe } from '@/lib/recipes';
 import {
@@ -24,22 +25,95 @@ import {
   roundKcal,
   stapleAmountLabel,
   stapleLineLabel,
-  stapleSuggestion,
 } from '@/lib/staples';
 import { useAppStore } from '@/lib/storage';
-import type { MealSlot, Recipe } from '@/lib/types';
+import type { Recipe } from '@/lib/types';
+
+/** 从「轻」到「重」：一餐里多道菜时，标签取最重的那道的油量。 */
+const OIL_ORDER = { low: 0, medium: 1, high: 2 } as const;
+
+/** 达成情况只报这三项：其余两项（脂肪、纤维）仍以克数显示，但不给比例。 */
+const ACHIEVEMENT_LABELS = { kcal: '热量', protein: '蛋白质', carbs: '碳水' } as const;
+const ACHIEVEMENT_KEYS = ['kcal', 'protein', 'carbs'] as const;
+
+function joinParts(parts: (string | null)[]): string {
+  return parts.filter((part): part is string => part !== null).join(' · ');
+}
+
+/**
+ * 今日页的兜底屏。整个 app 里目前只有这一个路由导出 `ErrorBoundary`（`expo-router` 只会给导出它的
+ * 路由套一层 `Try`，见 `node_modules/expo-router/build/useScreens.js`），而它挡的是最要紧的那个页面：
+ * 没有它的话，今日页渲染时抛一个异常就是**白屏**，用户没有任何恢复手段（连「重新生成」都点不到）。
+ *
+ * `error.message` 只在开发构建里显示：它是给开发看的，正式包里显示出来对用户没有意义。
+ */
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  return (
+    <Screen title="今日" subtitle={todayLabel()}>
+      <Card>
+        <ThemedText type="headline">今日页出错了</ThemedText>
+        <ThemedText type="caption" themeColor="textSecondary">
+          这一页没能画出来。点下面的按钮重试；一直不行就去「我的 · 数据」用本地规则重新生成今天的三餐。
+        </ThemedText>
+        {__DEV__ ? (
+          <ThemedText type="caption" themeColor="textTertiary">
+            {error.message}
+          </ThemedText>
+        ) : null}
+        <PlainButton label="重试" onPress={() => void retry()} />
+      </Card>
+    </Screen>
+  );
+}
+
+/**
+ * 一餐里的一个组成部分：整行可点，进详情页看做法。
+ *
+ * 行的形状与「今日主食」卡里的 `CardRow` 一致（左侧名称、右侧数值、行间发丝线），只是整行包在
+ * `Pressable` 里 —— 一餐有 2–3 个组成部分，点整张卡片已经没法表达「点开哪一道」。
+ */
+function DishRow({
+  label,
+  kcal,
+  divider,
+  onPress,
+}: {
+  label: string;
+  kcal: number;
+  divider: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label}，约 ${kcal} 千卡，查看做法`}
+      onPress={onPress}
+      style={({ pressed }) => (pressed ? styles.rowPressed : undefined)}>
+      <CardRow
+        divider={divider}
+        label={<ThemedText type="body">{label}</ThemedText>}
+        value={
+          <ThemedText type="body" themeColor="textSecondary">
+            约 {kcal} 千卡 ›
+          </ThemedText>
+        }
+      />
+    </Pressable>
+  );
+}
 
 export default function TodayScreen() {
   const {
     hydrated,
     plan,
-    fridge,
+    pantry,
     profile,
     regenerateToday,
     regeneratePlan,
     shoppingList,
     aiConfigured,
     aiBusy,
+    aiAttempt,
     aiError,
     cancelAiGeneration,
   } = useAppStore();
@@ -57,19 +131,27 @@ export default function TodayScreen() {
     );
   }
 
-  const meals = MEAL_SLOTS.map((slot) => ({ slot, recipe: getRecipe(plan.meals[slot]) })).filter(
-    (meal): meal is { slot: MealSlot; recipe: Recipe } => meal.recipe !== undefined,
-  );
-  const totalCalories = meals.reduce((sum, meal) => sum + meal.recipe.calories, 0);
+  // 每个槽位是 2–3 个组成部分（本地路径只有一道，数组长度 1）。解析不出的 id 与其它消费方一样静默跳过。
+  const meals = MEAL_SLOTS.map((slot) => ({
+    slot,
+    recipes: plan.meals[slot]
+      .map((id) => getRecipe(id))
+      .filter((recipe): recipe is Recipe => recipe !== undefined),
+  })).filter((meal) => meal.recipes.length > 0);
 
+  const target = nutritionTarget(profile);
+  const nutrition = dayNutrition(plan, profile);
   const staples = buildStaplePlan(plan, profile);
   const members = profile.members;
-  const portions = householdPortions(profile);
-  const stapleKcal = roundKcal(staples.addedKcalPerServing);
-  // 三餐菜品是「每人份」的数据，全家的数字就是它乘以份数；主食则是每位成员各自换算后的合计数。
-  const householdKcal = roundKcal(totalCalories * portions + staples.addedKcalHousehold);
-  // Both roundings happen once, on the raw total: rounding the staple first would add up to 10 kcal of drift.
-  const dayKcal = roundKcal(totalCalories + staples.addedKcalPerServing);
+  const stapleKcal = roundKcal(staples.addedMacrosPerServing.kcal);
+  const achievementParts = nutrition
+    ? joinParts(
+        ACHIEVEMENT_KEYS.map((key) => {
+          const percent = achievement(nutrition.household, target)[key];
+          return percent === undefined ? null : `${ACHIEVEMENT_LABELS[key]} ${percent}%`;
+        }),
+      )
+    : '';
   // 一次算一次：这道菜为什么被排除，整页只需要一个结论。
   const excluded = excludedRecipes(profile);
   const excludedReasons = excluded
@@ -109,10 +191,14 @@ export default function TodayScreen() {
         <Card>
           <View style={styles.busyRow}>
             <ActivityIndicator />
-            <ThemedText type="body">AI 正在设计菜单，通常 10–30 秒</ThemedText>
+            <ThemedText type="body">
+              {aiAttempt > 1 ? '第一次返回不合格，正在重试…' : 'AI 正在设计菜单，通常 10–30 秒'}
+            </ThemedText>
           </View>
           <ThemedText type="caption" themeColor="textSecondary">
-            生成完会按家人的禁忌在本机复核一遍。切到别的页面也不会中断。
+            {aiAttempt > 1
+              ? '已经把不合格的原因讲给模型听了，这次通常会好。'
+              : '生成完会按家人的禁忌在本机复核一遍。切到别的页面也不会中断。'}
           </ThemedText>
           <PlainButton label="取消" onPress={cancelAiGeneration} />
         </Card>
@@ -143,34 +229,60 @@ export default function TodayScreen() {
         </ThemedText>
       ) : null}
 
-      <Card>
-        <View style={styles.summaryRow}>
-          <View>
-            <ThemedText type="caption" themeColor="textSecondary">
-              三餐菜品合计
+      {/* 模型有话要说时的一张卡（0–2 句）：典型的是「食库里有样食材我不知道你家怎么吃，先没敢用」。
+          随 plan 落盘，所以重启后还在；重新生成会整份换掉。本地菜单永远没有这张卡。 */}
+      {plan.notes && plan.notes.length > 0 ? (
+        <Card>
+          <ThemedText type="headline">菜单说明</ThemedText>
+          {plan.notes.map((note, index) => (
+            // 用下标做 key：两句话可能一模一样（模型不是没干过），用文案当 key 会撞。
+            <ThemedText key={`note-${index}`} type="small" themeColor="textSecondary">
+              {note}
             </ThemedText>
-            <ThemedText type="title">约 {totalCalories} 千卡</ThemedText>
-          </View>
+          ))}
+        </Card>
+      ) : null}
+
+      {/* 今日目标 + 今天这份菜单的达成情况。原来那张「三餐菜品合计」卡的全家合计行并到了这里：
+          两处各报一个当天总数，口径迟早对不上。 */}
+      <Card>
+        <View style={styles.mealHeader}>
+          <ThemedText type="headline">今日目标</ThemedText>
           <TagRow>
             {members.length > 0 ? (
-              <Tag label={`${members.length} 人`} />
+              <Tag label={householdPortionsLabel(profile)} />
             ) : (
               <Tag label="还没添加成员" tone="missing" />
             )}
-            {portions !== members.length ? <Tag label={householdPortionsLabel(profile)} /> : null}
           </TagRow>
         </View>
-        <ThemedText type="caption" themeColor="textSecondary">
-          每人份估算，只算菜品本身、不含另配的主食（见下方「今日主食」）。
-          {fridge.length > 0
-            ? `会优先挑冰箱里已有食材的菜，当前有 ${fridge.length} 样。`
-            : '冰箱还是空的，先添加食材，菜单会更实用。'}
+        <ThemedText type="body">
+          热量约 {target.kcal} 千卡 · 蛋白质约 {target.protein}g
         </ThemedText>
-        {members.length > 0 ? (
-          <ThemedText type="caption" themeColor="textSecondary">
-            {`全家 ${householdLabel(profile)} 菜品合计约 ${roundKcal(totalCalories * portions)} 千卡；含另配主食约 ${householdKcal} 千卡。`}
-          </ThemedText>
+        <ThemedText type="body">
+          碳水约 {target.carbs}g · 脂肪约 {target.fat}g · 纤维约 {target.fiber}g
+        </ThemedText>
+        {nutrition ? (
+          <>
+            <ThemedText type="caption" themeColor="textSecondary">
+              {`今天这份菜单（全家）：${joinParts([
+                `约 ${roundKcal(nutrition.household.kcal)} 千卡`,
+                `蛋白质 ${Math.round(nutrition.household.protein)}g`,
+                nutrition.household.carbs === null ? null : `碳水 ${Math.round(nutrition.household.carbs)}g`,
+                nutrition.household.fat === null ? null : `脂肪 ${Math.round(nutrition.household.fat)}g`,
+                nutrition.household.fiber === null ? null : `纤维 ${Math.round(nutrition.household.fiber)}g`,
+              ])}`}
+            </ThemedText>
+            {achievementParts.length > 0 ? (
+              <ThemedText type="caption" themeColor="textSecondary">
+                达成：{achievementParts}
+              </ThemedText>
+            ) : null}
+          </>
         ) : null}
+        <ThemedText type="caption" themeColor="textSecondary">
+          按每位成员的年龄、体重方向与特殊状态估算，仅供参考；特殊疾病请遵医嘱。
+        </ThemedText>
       </Card>
 
       {excluded.length > 0 ? (
@@ -205,21 +317,17 @@ export default function TodayScreen() {
           <ThemedText type="title">
             {stapleKcal > 0 ? `另配主食约 ${stapleKcal} 千卡/人（标准份）` : '今天的主食都在菜里'}
           </ThemedText>
-          {stapleKcal > 0 ? (
-            <ThemedText type="small" themeColor="textSecondary">
-              含主食全天约 {dayKcal} 千卡/人（标准份）；全家合计约 {householdKcal} 千卡
-            </ThemedText>
-          ) : null}
           {members.length > 0 ? (
             <ThemedText type="caption" themeColor="textSecondary">
               每人份量：{memberPortionLine(profile)}
             </ThemedText>
           ) : null}
 
-          <View style={styles.stapleList}>
+          <View style={styles.rowList}>
             {staples.lines.map((line, index) => (
+              // 一餐可能有多个组成部分（各自的菜里都带主食），所以 key 由 slot 与下标组成，不能只用 slot。
               <CardRow
-                key={line.slot}
+                key={line.key}
                 divider={index > 0}
                 label={
                   <ThemedText type="body">
@@ -241,7 +349,7 @@ export default function TodayScreen() {
             份）和各自的目标换算；热量是每人份（标准份）估算。
           </ThemedText>
           <ThemedText type="caption" themeColor="textSecondary">
-            早餐的主食就是菜本身，已含在菜品热量里；主食请自备，不在采购清单和冰箱匹配里。
+            早餐的主食就是菜本身，已含在菜品热量里；主食请自备，不在采购清单和食库匹配里。
           </ThemedText>
         </Card>
       ) : null}
@@ -266,77 +374,125 @@ export default function TodayScreen() {
             </ThemedText>
           </View>
           <ThemedText type="caption" themeColor="textSecondary">
-            三道菜还缺 {shoppingList.length} 样食材，买到的勾上，一键放进冰箱。
+            今天的菜单还缺 {shoppingList.length} 样食材。食库只影响大约一半餐次的选菜，其余餐次是特意推荐的新菜
+            —— 缺几样很正常。买到的勾上，一键放进食库。
           </ThemedText>
         </PressableCard>
       ) : null}
 
-      {meals.map(({ slot, recipe }) => {
-        const match = matchRecipe(recipe, fridge);
-        const ready = match.missing.length === 0;
-        const suggestion = stapleSuggestion(recipe, profile);
-        // 「兼顾说明」：这道菜怎么照顾到每个人。空串（家里还没有成员）时不渲染。
-        const care = careLine(recipe, profile);
-        const ai = isAiRecipe(recipe);
+      {meals.map(({ slot, recipes }) => {
+        // 一餐的小计是**每人份**（卡片上其它数字也都是每人份），含这一餐的另配主食标准份。
+        const totals = mealTotals(plan, slot, profile);
+        const stapleLines = staples.lines.filter((line) => line.slot === slot);
+        const hasAddedStaple = stapleLines.some((line) => !line.fromDish);
+        const missing = [
+          ...new Set(recipes.flatMap((recipe) => matchRecipe(recipe, pantry).missing)),
+        ];
+        const ready = missing.length === 0;
+        const longest = Math.max(...recipes.map((recipe) => recipe.minutes));
+        const oil = recipes.reduce(
+          (worst, recipe) => (OIL_ORDER[recipe.oilLevel] > OIL_ORDER[worst] ? recipe.oilLevel : worst),
+          'low' as Recipe['oilLevel'],
+        );
+        // 「兼顾说明」：这道菜怎么照顾到每个人。家里还没有成员时 `careLine` 返回空串，不渲染。
+        const cares = recipes
+          .map((recipe) => ({ id: recipe.id, name: recipe.name, text: careLine(recipe, profile) }))
+          .filter((care) => care.text.length > 0);
+        const aiCares = recipes
+          .map((recipe) => ({ id: recipe.id, name: recipe.name, text: recipe.aiCare }))
+          .filter(
+            (care): care is { id: string; name: string; text: string } =>
+              typeof care.text === 'string' && care.text.length > 0,
+          );
+        const single = recipes.length === 1;
 
         return (
+          // **整张卡片可点**，点空白处（标题、小计、标签那些地方）打开**第一道**的做法；每一行仍然是
+          // 自己的 `Pressable`（内层优先），点哪一行就开哪一道。单组成部分的本地菜单因此回到改动前的
+          // 行为：整张卡就是那一道菜。
+          //
+          // 上一版只把每一行做成可点，卡片上那片没有响应者的区域点上去毫无反应 —— 看起来像「卡死」。
           <PressableCard
             key={slot}
-            accessibilityLabel={`${MEAL_SLOT_LABELS[slot]}，${recipe.name}`}
-            onPress={() => router.push({ pathname: '/recipe/[id]', params: { id: recipe.id } })}>
-            <View style={styles.mealHeader}>
-              <ThemedText type="caption" themeColor="textSecondary">
-                {MEAL_SLOT_LABELS[slot]}
-              </ThemedText>
-              <ThemedText type="caption" themeColor="textTertiary">
-                查看做法 ›
-              </ThemedText>
+            accessibilityLabel={`${MEAL_SLOT_LABELS[slot]}共 ${recipes.length} 道菜，打开第一道 ${recipes[0].name} 的做法`}
+            onPress={() =>
+              router.push({ pathname: '/recipe/[id]', params: { id: recipes[0].id } })
+            }>
+            <ThemedText type="caption" themeColor="textSecondary">
+              {MEAL_SLOT_LABELS[slot]}
+            </ThemedText>
+
+            <ThemedText type="body" themeColor="textSecondary">
+              {`约 ${roundKcal(totals.kcal)} 千卡 · 蛋白质 ${Math.round(totals.protein)}g${
+                totals.carbs === null ? '' : ` · 碳水 ${Math.round(totals.carbs)}g`
+              }（每人份${hasAddedStaple ? '，含另配主食' : ''}）`}
+            </ThemedText>
+
+            <View style={styles.rowList}>
+              {recipes.map((recipe, index) => (
+                <DishRow
+                  key={recipe.id}
+                  divider={index > 0}
+                  label={`${recipe.role ? `${mealRoleLabel(recipe.role, slot)} · ` : ''}${recipe.name}`}
+                  kcal={recipe.calories}
+                  onPress={() =>
+                    router.push({ pathname: '/recipe/[id]', params: { id: recipe.id } })
+                  }
+                />
+              ))}
             </View>
 
-            <ThemedText type="title">{recipe.name}</ThemedText>
+            {stapleLines.map((line) => (
+              <ThemedText key={line.key} type="caption" themeColor="textSecondary">
+                {stapleLineLabel(line, profile)}
+              </ThemedText>
+            ))}
 
             <TagRow>
-              {ai ? <Tag label="AI" tone="ai" /> : null}
-              <Tag label={`${recipe.minutes} 分钟`} />
-              <Tag label={`${recipe.calories} 千卡/人`} tone="calories" />
-              <Tag
-                label={OIL_LEVEL_LABELS[recipe.oilLevel]}
-                tone={recipe.oilLevel === 'low' ? 'ready' : 'neutral'}
-              />
+              {recipes.some((recipe) => isAiRecipe(recipe)) ? <Tag label="AI" tone="ai" /> : null}
+              <Tag label={`最长 ${longest} 分钟`} />
+              {oil !== 'low' ? (
+                <Tag label={OIL_LEVEL_LABELS[oil]} tone="neutral" />
+              ) : (
+                <Tag label={OIL_LEVEL_LABELS.low} tone="ready" />
+              )}
             </TagRow>
 
             <View style={styles.matchRow}>
-              <Tag label={ready ? '食材齐全' : `缺 ${match.missing.length} 样`} tone={ready ? 'ready' : 'missing'} />
+              <Tag label={ready ? '食材齐全' : `缺 ${missing.length} 样`} tone={ready ? 'ready' : 'missing'} />
               <ThemedText type="caption" themeColor="textSecondary" numberOfLines={1} style={styles.matchText}>
-                {ready ? '冰箱里都有，可以直接做' : `缺 ${match.missing.join('、')}`}
+                {ready ? '食库里都有，可以直接做' : `缺 ${missing.join('、')}`}
               </ThemedText>
             </View>
 
-            {care ? (
-              <ThemedText type="caption" themeColor="textSecondary" style={styles.careText}>
-                {care}
+            {cares.map((care) => (
+              <ThemedText
+                key={`care-${care.id}`}
+                type="caption"
+                themeColor="textSecondary"
+                style={styles.careText}>
+                {single ? care.text : `${care.name}：${care.text}`}
               </ThemedText>
-            ) : null}
+            ))}
 
             {/* 模型写的「兼顾说明」是**多出来的一行**，不替换上面那句模板文案：模板那句由配料
                 算出、高血压会提醒少喝汤汁，比模型的一句话更靠得住。 */}
-            {recipe.aiCare ? (
-              <ThemedText type="caption" themeColor="textSecondary" style={styles.careText}>
-                AI 说明：{recipe.aiCare}
+            {aiCares.map((care) => (
+              <ThemedText
+                key={`ai-care-${care.id}`}
+                type="caption"
+                themeColor="textSecondary"
+                style={styles.careText}>
+                {single ? `AI 说明：${care.text}` : `AI 说明（${care.name}）：${care.text}`}
               </ThemedText>
-            ) : null}
-
-            {suggestion ? (
-              <ThemedText type="caption" themeColor="textSecondary">
-                {stapleLineLabel(suggestion, profile)}
-              </ThemedText>
-            ) : null}
+            ))}
 
             {/* 午晚餐的 pairing 写的就是主食，已经由上面那行按人数和目标算好了；早餐的 pairing
-                是蛋白/饮品这类别的搭配，照原样显示。 */}
-            {recipe.pairing && !recipe.staple ? (
+                是蛋白/饮品这类别的搭配，照原样显示。多组成部分时 pairing 只可能是模型给的额外建议，
+                每道一行会太长 —— 只在单组成部分时显示（与改动前的本地菜单逐字相同）。 */}
+            {single && recipes[0].pairing && !recipes[0].staple ? (
               <ThemedText type="caption" themeColor="textSecondary">
-                建议搭配：{recipe.pairing}
+                建议搭配：{recipes[0].pairing}
               </ThemedText>
             ) : null}
           </PressableCard>
@@ -352,12 +508,6 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.five,
     gap: Spacing.three,
   },
-  summaryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.two,
-  },
   mealHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -370,8 +520,12 @@ const styles = StyleSheet.create({
   },
   // Cards holding `CardRow`s drop the card's gap: the rows carry their own padding and hairlines
   // (same as the 食材清单 card on the recipe page).
-  stapleList: {
+  rowList: {
     gap: 0,
+  },
+  // 行内点击的反馈：整行变淡，不改背景色（卡片有自己的底色）。
+  rowPressed: {
+    opacity: 0.5,
   },
   matchText: {
     flexShrink: 1,

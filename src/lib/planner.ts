@@ -4,7 +4,7 @@ import { METABOLIC_TAGS, bodyTagOf } from './members';
 import { RECIPES } from './recipes';
 import type {
   DayPlan,
-  FridgeItem,
+  PantryItem,
   Goal,
   Ingredient,
   Member,
@@ -14,7 +14,7 @@ import type {
 } from './types';
 
 /**
- * Fridge names that stand in for an ingredient written differently on the recipe side.
+ * Pantry names that stand in for an ingredient written differently on the recipe side.
  * Names are compared after `normalizeName`, and substring containment (for names of two
  * or more characters) covers variants that are not worth listing here.
  */
@@ -55,7 +55,7 @@ const ALIASES: Record<string, string[]> = {
 const PICK_SPREAD = 3;
 
 const WEIGHTS = {
-  /** Share of the main ingredients already in the fridge. */
+  /** Share of the main ingredients already in the pantry. */
   readyRatio: 3,
   /** Everything is on hand — the dish can be cooked right now. */
   allReady: 3,
@@ -75,7 +75,7 @@ const WEIGHTS = {
 export interface RecipeMatch {
   readyCount: number;
   totalCount: number;
-  /** 0–1, share of main ingredients available in the fridge. */
+  /** 0–1, share of main ingredients available in the pantry. */
   ratio: number;
   missing: string[];
 }
@@ -90,7 +90,7 @@ export function normalizeName(name: string): string {
   return name.replace(/[\s、,，.。()（）]/g, '').toLowerCase();
 }
 
-function matchesFridge(ingredientName: string, available: Set<string>): boolean {
+function matchesPantry(ingredientName: string, available: Set<string>): boolean {
   const target = normalizeName(ingredientName);
   if (available.has(target)) return true;
 
@@ -106,27 +106,27 @@ function matchesFridge(ingredientName: string, available: Set<string>): boolean 
   return false;
 }
 
-function availableNames(fridge: FridgeItem[]): Set<string> {
-  return new Set(fridge.map((item) => normalizeName(item.name)));
+function availableNames(pantry: PantryItem[]): Set<string> {
+  return new Set(pantry.map((item) => normalizeName(item.name)));
 }
 
-/** Main ingredients the fridge does not cover, in `recipe.ingredients` order. */
+/** Main ingredients the pantry does not cover, in `recipe.ingredients` order. */
 function missingAgainst(recipe: Recipe, available: Set<string>): Ingredient[] {
-  return recipe.ingredients.filter((ingredient) => !matchesFridge(ingredient.name, available));
+  return recipe.ingredients.filter((ingredient) => !matchesPantry(ingredient.name, available));
 }
 
 /**
  * The same split as `matchRecipe`, but keeping the ingredients themselves: the shopping list needs
  * their amounts (to add up what is missing across meals) and their categories (to file what the
- * user buys into the right fridge group).
+ * user buys into the right pantry group).
  */
-export function missingIngredients(recipe: Recipe, fridge: FridgeItem[]): Ingredient[] {
-  return missingAgainst(recipe, availableNames(fridge));
+export function missingIngredients(recipe: Recipe, pantry: PantryItem[]): Ingredient[] {
+  return missingAgainst(recipe, availableNames(pantry));
 }
 
-/** Splits a recipe's main ingredients into what the fridge covers and what is missing. */
-export function matchRecipe(recipe: Recipe, fridge: FridgeItem[]): RecipeMatch {
-  return matchAgainst(recipe, availableNames(fridge));
+/** Splits a recipe's main ingredients into what the pantry covers and what is missing. */
+export function matchRecipe(recipe: Recipe, pantry: PantryItem[]): RecipeMatch {
+  return matchAgainst(recipe, availableNames(pantry));
 }
 
 /** Both entry points share `missingAgainst`, so the counts and the shopping list cannot drift. */
@@ -203,7 +203,7 @@ function memberTagFit(recipe: Recipe, member: Member): number {
   // `isExcluded` 整道排除了，轮不到打分。
   //
   // 五个标签全命中低等级是 +2.5，被 `memberFit` 的 clamp 收成 +2：这些加分本来就只该是微调，
-  // 不该盖过冰箱覆盖度那两项。也因此多项叠加不是线性的（痛风+高血压 ≈ 痛风），这是有意的。
+  // 不该盖过食库覆盖度那两项。也因此多项叠加不是线性的（痛风+高血压 ≈ 痛风），这是有意的。
   for (const tag of METABOLIC_TAGS) {
     if (member.special.includes(tag) && diseaseRule(recipe, tag)?.level === 'low') score += 0.5;
   }
@@ -219,7 +219,7 @@ function clamp(value: number, min: number, max: number): number {
  * 均衡 member still counts in the denominator.
  *
  * Each member is clamped to `goalFit`'s own range before averaging: without it 增肌 (2) + 发育期儿童
- * (1.5 + 1) would reach 4.5, × `WEIGHTS.member` = 9, and swamp the fridge terms (3 + 3) that should
+ * (1.5 + 1) would reach 4.5, × `WEIGHTS.member` = 9, and swamp the pantry terms (3 + 3) that should
  * dominate. A household of one member carrying only a body tag therefore scores exactly `goalFit`.
  */
 function memberFit(recipe: Recipe, profile: Profile): number {
@@ -271,14 +271,14 @@ export function scoreRecipe(
   return score;
 }
 
-/** Ranks a pool of dishes best-first: fridge coverage first, then goal and preferences. */
+/** Ranks a pool of dishes best-first: pantry coverage first, then goal and preferences. */
 export function rankRecipes(
   pool: Recipe[],
-  fridge: FridgeItem[],
+  pantry: PantryItem[],
   profile: Profile,
   options: ScoreOptions = {},
 ): RankedRecipe[] {
-  const available = availableNames(fridge);
+  const available = availableNames(pantry);
   // 先安全、后偏好：偏好可以松弛，禁忌不行。
   return applyPreferenceFilter(applyMemberFilter(pool, profile), profile)
     .map((recipe) => {
@@ -294,12 +294,12 @@ export function rankRecipes(
  */
 function pickMeal(
   pool: Recipe[],
-  fridge: FridgeItem[],
+  pantry: PantryItem[],
   profile: Profile,
   taken: Set<string>,
   options: ScoreOptions = {},
 ): Recipe | undefined {
-  const ranked = rankRecipes(pool, fridge, profile, options).filter(
+  const ranked = rankRecipes(pool, pantry, profile, options).filter(
     (entry) => !taken.has(entry.recipe.id),
   );
   const candidates = ranked.slice(0, PICK_SPREAD);
@@ -317,18 +317,19 @@ function safeFallback(profile: Profile): Recipe {
   return RECIPES.find((recipe) => !isExcluded(recipe, profile)) ?? RECIPES[0];
 }
 
-/** Builds a breakfast / lunch / dinner plan for today, preferring what the fridge already holds. */
+/** Builds a breakfast / lunch / dinner plan for today, preferring what the pantry already holds. */
 export function generatePlan(
   profile: Profile,
-  fridge: FridgeItem[],
+  pantry: PantryItem[],
   previous?: DayPlan | null,
 ): DayPlan {
-  const avoid = new Set<string>(previous ? Object.values(previous.meals) : []);
+  // `meals` 每槽是数组（AI 一餐 2–3 个组成部分），所以要先摊平才知道上一份菜单用过哪些 id。
+  const avoid = new Set<string>(previous ? Object.values(previous.meals).flat() : []);
   const taken = new Set<string>();
 
   const breakfast = pickMeal(
     RECIPES.filter((recipe) => recipe.slots.includes('breakfast')),
-    fridge,
+    pantry,
     profile,
     taken,
     { avoid },
@@ -337,7 +338,7 @@ export function generatePlan(
 
   const lunch = pickMeal(
     RECIPES.filter((recipe) => recipe.slots.includes('lunch')),
-    fridge,
+    pantry,
     profile,
     taken,
     { avoid },
@@ -348,7 +349,7 @@ export function generatePlan(
   const lunchHasMeat = lunch ? hasMeat(lunch) : false;
   const dinner = pickMeal(
     RECIPES.filter((recipe) => recipe.slots.includes('dinner')),
-    fridge,
+    pantry,
     profile,
     taken,
     {
@@ -362,10 +363,11 @@ export function generatePlan(
   const fallback = safeFallback(profile);
   return {
     date: todayKey(),
+    // 本地路径一餐一道菜：数组长度 1。形状与 AI 那条路径统一，消费方就只有一个分支。
     meals: {
-      breakfast: (breakfast ?? lunch ?? dinner ?? fallback).id,
-      lunch: (lunch ?? dinner ?? breakfast ?? fallback).id,
-      dinner: (dinner ?? lunch ?? breakfast ?? fallback).id,
+      breakfast: [(breakfast ?? lunch ?? dinner ?? fallback).id],
+      lunch: [(lunch ?? dinner ?? breakfast ?? fallback).id],
+      dinner: [(dinner ?? lunch ?? breakfast ?? fallback).id],
     },
     generatedAt: Date.now(),
     // 显式写出来而不是靠 `DayPlan.source` 的缺省：界面靠它决定要不要打「AI」角标和免责小字，

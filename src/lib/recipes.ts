@@ -2,7 +2,7 @@ import type { IngredientUnit, Recipe, StapleServing } from './types';
 
 /**
  * Built-in recipe library. v1 deliberately ships fixed data instead of calling a model,
- * so the plan is generated offline from what is actually in the fridge.
+ * so the plan is generated offline from what is actually in the pantry.
  *
  * Conventions:
  * - Ingredient amounts are for ONE serving; the UI multiplies them by the household's total 份数
@@ -15,14 +15,20 @@ import type { IngredientUnit, Recipe, StapleServing } from './types';
  * - `care` (今日页「兼顾说明」) and `cautions` (详情页「注意事项」) are keyed by member tag; `{name}` is
  *   replaced with the member's 称呼. Hand-written text wins, and a missing entry falls back to a
  *   template that is derived from the dish's own numbers (see `advice.ts`).
- * - `ingredients` are the main ingredients that drive fridge matching; `seasonings` are
+ * - `ingredients` are the main ingredients that drive pantry matching; `seasonings` are
  *   assumed to be pantry staples and never count as missing.
  * - `staple` is the 主食 a dish is served with, structured so the 今日 tab can scale it to the
  *   household's 份数, each member's 身体目标 (`staples.stapleFactorSum`). 午/晚餐 must set it (their
  *   `pairing` is only a staple); 早餐 leaves it undefined because its staple is already one of
  *   `ingredients` (category: 'staple'), which also means its energy is inside `calories`.
- * - Never move a `staple` into `ingredients`: those drive fridge matching and the 采购清单, and a
+ * - Never move a `staple` into `ingredients`: those drive pantry matching and the 采购清单, and a
  *   suggested bowl of rice must not count as a missing ingredient.
+ * - `carbs`/`fat`/`fiber` are per-serving estimates worked out from the ingredient list (staples at
+ *   their dry weight, produce as edible portion, cooking oil at 1 ml ≈ 1 g fat), rounded to whole
+ *   grams. They are a **second, independent** estimate next to `calories`, which predates them and
+ *   runs low for the oilier dishes —— 番茄炒蛋's three eggs plus 12 ml of oil already exceed the
+ *   240 kcal it declares. Deliberately not "reconciled" here: `calories` is displayed all over the
+ *   app and drives the 减脂/增肌 ranking, so moving it is a separate decision from adding these.
  */
 
 /** Shared 主食 suggestions so the same bowl is written once. Amounts are per person. */
@@ -39,6 +45,9 @@ export const RECIPES: Recipe[] = [
     minutes: 30,
     calories: 220,
     protein: 6,
+    carbs: 44,
+    fat: 2,
+    fiber: 2,
     oilLevel: 'low',
     goals: ['fatLoss', 'balanced'],
     preferences: ['light', 'vegetarian', 'lowSugar'],
@@ -68,6 +77,9 @@ export const RECIPES: Recipe[] = [
     minutes: 15,
     calories: 430,
     protein: 20,
+    carbs: 87,
+    fat: 21,
+    fiber: 4,
     oilLevel: 'medium',
     goals: ['balanced', 'muscleGain'],
     preferences: ['light'],
@@ -102,6 +114,9 @@ export const RECIPES: Recipe[] = [
     minutes: 10,
     calories: 320,
     protein: 20,
+    carbs: 34,
+    fat: 12,
+    fiber: 6,
     oilLevel: 'low',
     goals: ['fatLoss', 'muscleGain'],
     preferences: ['light', 'lowSugar'],
@@ -135,6 +150,9 @@ export const RECIPES: Recipe[] = [
     minutes: 5,
     calories: 380,
     protein: 15,
+    carbs: 70,
+    fat: 12,
+    fiber: 6,
     oilLevel: 'low',
     goals: ['muscleGain', 'balanced'],
     preferences: ['light'],
@@ -165,6 +183,9 @@ export const RECIPES: Recipe[] = [
     minutes: 10,
     calories: 240,
     protein: 15,
+    carbs: 14,
+    fat: 28,
+    fiber: 3,
     oilLevel: 'medium',
     goals: ['balanced', 'muscleGain'],
     preferences: ['light'],
@@ -198,6 +219,9 @@ export const RECIPES: Recipe[] = [
     minutes: 8,
     calories: 120,
     protein: 6,
+    carbs: 14,
+    fat: 10,
+    fiber: 5,
     oilLevel: 'low',
     goals: ['fatLoss'],
     preferences: ['light', 'vegetarian', 'lowSugar'],
@@ -230,6 +254,9 @@ export const RECIPES: Recipe[] = [
     minutes: 7,
     calories: 90,
     protein: 4,
+    carbs: 7,
+    fat: 9,
+    fiber: 2,
     oilLevel: 'low',
     goals: ['fatLoss'],
     preferences: ['light', 'vegetarian', 'lowSugar'],
@@ -261,6 +288,9 @@ export const RECIPES: Recipe[] = [
     minutes: 18,
     calories: 330,
     protein: 45,
+    carbs: 8,
+    fat: 13,
+    fiber: 2,
     oilLevel: 'low',
     goals: ['fatLoss', 'muscleGain'],
     preferences: ['light', 'lowSugar'],
@@ -301,6 +331,9 @@ export const RECIPES: Recipe[] = [
     minutes: 10,
     calories: 140,
     protein: 30,
+    carbs: 5,
+    fat: 9,
+    fiber: 0,
     oilLevel: 'low',
     goals: ['fatLoss', 'muscleGain'],
     preferences: ['light', 'lowSugar'],
@@ -340,6 +373,9 @@ export const RECIPES: Recipe[] = [
     minutes: 15,
     calories: 320,
     protein: 22,
+    carbs: 18,
+    fat: 47,
+    fiber: 3,
     oilLevel: 'medium',
     goals: ['balanced'],
     preferences: ['spicy'],
@@ -378,6 +414,9 @@ export const RECIPES: Recipe[] = [
     minutes: 20,
     calories: 450,
     protein: 30,
+    carbs: 23,
+    fat: 70,
+    fiber: 3,
     oilLevel: 'high',
     goals: ['muscleGain'],
     preferences: ['spicy'],
@@ -421,6 +460,9 @@ export const RECIPES: Recipe[] = [
     minutes: 12,
     calories: 180,
     protein: 5,
+    carbs: 48,
+    fat: 13,
+    fiber: 4,
     oilLevel: 'medium',
     goals: ['balanced'],
     preferences: ['spicy'],
@@ -457,6 +499,9 @@ export const RECIPES: Recipe[] = [
     minutes: 25,
     calories: 360,
     protein: 32,
+    carbs: 29,
+    fat: 42,
+    fiber: 9,
     oilLevel: 'medium',
     goals: ['muscleGain', 'balanced'],
     preferences: ['light'],
@@ -494,6 +539,9 @@ export const RECIPES: Recipe[] = [
     minutes: 60,
     calories: 280,
     protein: 25,
+    carbs: 9,
+    fat: 34,
+    fiber: 2,
     oilLevel: 'medium',
     goals: ['balanced'],
     preferences: ['light'],
@@ -530,6 +578,9 @@ export const RECIPES: Recipe[] = [
     minutes: 5,
     calories: 70,
     protein: 2,
+    carbs: 14,
+    fat: 8,
+    fiber: 1,
     oilLevel: 'low',
     goals: ['fatLoss'],
     preferences: ['light', 'vegetarian', 'lowSugar'],
@@ -566,6 +617,9 @@ export const RECIPES: Recipe[] = [
     minutes: 10,
     calories: 210,
     protein: 28,
+    carbs: 8,
+    fat: 26,
+    fiber: 1,
     oilLevel: 'low',
     goals: ['fatLoss', 'muscleGain'],
     preferences: ['light', 'lowSugar'],

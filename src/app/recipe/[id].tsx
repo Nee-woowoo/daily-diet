@@ -15,6 +15,7 @@ import {
   GOAL_LABELS,
   GOAL_TONES,
   MEAL_SLOT_LABELS,
+  mealRoleLabel,
   OIL_LEVEL_LABELS,
   PREFERENCE_LABELS,
   PREFERENCE_TONES,
@@ -35,7 +36,7 @@ import type { Ingredient } from '@/lib/types';
 
 export default function RecipeDetailScreen() {
   const params = useLocalSearchParams<{ id: string }>();
-  const { fridge, profile } = useAppStore();
+  const { pantry, profile } = useAppStore();
   const theme = useTheme();
 
   const recipe = getRecipe(params.id ?? '');
@@ -51,7 +52,7 @@ export default function RecipeDetailScreen() {
     );
   }
 
-  const match = matchRecipe(recipe, fridge);
+  const match = matchRecipe(recipe, pantry);
   const ready = match.missing.length === 0;
   // 全家份数：每位成员按年龄档各占一份（成人 1、儿童 0.5、长辈 0.8），食材克数是它乘出来的。
   const portions = householdPortions(profile);
@@ -77,9 +78,17 @@ export default function RecipeDetailScreen() {
           <ThemedText type="title">{recipe.name}</ThemedText>
           <TagRow>
             {ai ? <Tag label="AI" tone="ai" /> : null}
+            {/* 角色只在 AI 菜上有（本地 16 道菜没填）：同一餐里这一行是「荤菜」还是「饮品」。 */}
+            {recipe.role ? (
+              <Tag label={mealRoleLabel(recipe.role, recipe.slots[0] ?? 'lunch')} />
+            ) : null}
             <Tag label={`总耗时 ${recipe.minutes} 分钟`} />
             <Tag label={`${recipe.calories} 千卡/人`} tone="calories" />
             <Tag label={`蛋白质 ${recipe.protein} 克`} />
+            {/* 三项宏量都是每人份估算，与热量同一套口径；没填的（老 AI 缓存）不显示，不显示成 0 克。 */}
+            {recipe.carbs !== undefined ? <Tag label={`碳水 ${recipe.carbs} 克`} /> : null}
+            {recipe.fat !== undefined ? <Tag label={`脂肪 ${recipe.fat} 克`} /> : null}
+            {recipe.fiber !== undefined ? <Tag label={`纤维 ${recipe.fiber} 克`} /> : null}
             <Tag
               label={OIL_LEVEL_LABELS[recipe.oilLevel]}
               tone={recipe.oilLevel === 'low' ? 'ready' : 'neutral'}
@@ -105,6 +114,11 @@ export default function RecipeDetailScreen() {
             适合{recipe.slots.map((slot) => MEAL_SLOT_LABELS[slot]).join(' / ')} · 用量按{' '}
             {portionsLabel}计算
           </ThemedText>
+          {recipe.carbs !== undefined || recipe.fat !== undefined || recipe.fiber !== undefined ? (
+            <ThemedText type="caption" themeColor="textSecondary">
+              上面五个营养数字都是每人份的估算值，按配料用量折算，仅供参考。
+            </ThemedText>
+          ) : null}
         </Card>
 
         {/* AI 菜：来源说明 + 模型写的「兼顾说明」一句 + 免责。本地 16 道菜不会有这张卡。 */}
@@ -145,7 +159,7 @@ export default function RecipeDetailScreen() {
             <Tag label={ready ? '可以直接做' : '需要补货'} tone={ready ? 'ready' : 'missing'} />
           </View>
           <ThemedText type="caption" themeColor="textSecondary">
-            冰箱里已有 {match.readyCount}/{match.totalCount} 样主料。
+            食库里已有 {match.readyCount}/{match.totalCount} 样主料。
           </ThemedText>
           {match.missing.length > 0 ? (
             <TagRow>

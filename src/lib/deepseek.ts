@@ -1,4 +1,13 @@
-import { failure, failureForStatus, type AiFailure, type MenuPrompt } from './ai';
+import {
+  MEAL_COMPONENTS_MAX,
+  NOTES_MAX,
+  NOTE_MAX_LENGTH,
+  failure,
+  failureForStatus,
+  type AiFailure,
+  type MenuPrompt,
+} from './ai';
+import { MEAL_SLOTS } from './labels';
 
 /**
  * DeepSeek 那一层：只有 fetch、状态码映射和超时。所有能离线测的逻辑都在 `ai.ts`，这里薄到不值得
@@ -19,8 +28,36 @@ import { failure, failureForStatus, type AiFailure, type MenuPrompt } from './ai
 export const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/chat/completions';
 export const DEEPSEEK_MODEL = 'deepseek-chat';
 
-/** 一顿饭的 json（三道菜的步骤与食材）留足余量；超了会以 `truncated` 失败并让用户重试。 */
-const MAX_TOKENS = 4096;
+/**
+ * 每道菜（组成部分）的 token 预算。中文大致 1 字 1 token，而一道菜的名称、五个数字、食材与调料明细、
+ * 3–8 步做法、care、tip 加起来约 200–350 字，取 500 是留了余量而不是量出来的。
+ */
+const TOKENS_PER_COMPONENT = 500;
+
+/** json 的信封（`{"meals":[{"slot":…,"components":[…]}]}` 那些键名、括号、逗号、换行）。 */
+const ENVELOPE_TOKENS = 512;
+
+/**
+ * 顶层 notes 的余量，**按形状推导**：`NOTES_MAX` 条、每条 `NOTE_MAX_LENGTH` 字（中文约 1 字 1 token），
+ * 再加每条 8 token 的引号逗号。改了 `ai.ts` 里那两个上限，这里跟着变 —— 不是另外拍一个数。
+ */
+const TOKENS_PER_NOTE = NOTE_MAX_LENGTH + 8;
+const NOTES_TOKENS = NOTES_MAX * TOKENS_PER_NOTE;
+
+/**
+ * 输出上限。**按最坏情况推导**，不是凭感觉填一个数：一餐最多 `MEAL_COMPONENTS_MAX` 个组成部分、
+ * 一共 `MEAL_SLOTS` 餐，所以上限 = 3 × 3 × 500 + 信封 ≈ 5000。
+ *
+ * 上一版这里是 4096，注释写着「一顿饭的 json」—— 那是「一餐一道菜」时代的余量，多道菜之后就不够
+ * 推导了。超了会以 `truncated` 失败并让用户重试（不崩、不脏写），但白跑一次请求；所以宁可给宽。
+ *
+ * ⚠️ 模型侧真正允许的上限我在这里验证不了（`api-docs.deepseek.com` 被网络策略挡住）。如果哪天真机
+ * 上稳定报 `truncated`，就调大这个推导里的常数 —— 别改 `MEAL_COMPONENTS_MAX`，那是数据形状。
+ */
+const MAX_TOKENS =
+  MEAL_SLOTS.length * MEAL_COMPONENTS_MAX * TOKENS_PER_COMPONENT +
+  ENVELOPE_TOKENS +
+  NOTES_TOKENS;
 
 /** 超过这个时间就放弃。界面上写的是「通常 10–30 秒」，60 秒是给慢网络留的余地。 */
 export const REQUEST_TIMEOUT_MS = 60_000;
@@ -121,7 +158,12 @@ async function request(
   }
 }
 
-/** 生成一份菜单。**每次调用只发一次请求**，失败就是失败，重试由用户点。 */
+/**
+ * 生成一份菜单。**每次调用只发一次请求** —— 这一层不做任何重试。
+ *
+ * 重试在上一层：`storage.generateWithAi` 在一次点击里最多调它两次（第二次把失败原因讲给模型听），
+ * 所以「这一层只发一次」这句话仍然成立，而界面上也说得清那两次是怎么来的。
+ */
 export async function callDeepSeek(
   apiKey: string,
   prompt: MenuPrompt,

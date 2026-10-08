@@ -12,26 +12,28 @@ import { Sheet } from '@/components/ui/sheet';
 import { TextField } from '@/components/ui/text-field';
 import { Spacing } from '@/constants/theme';
 import { CATEGORY_LABELS, CATEGORY_ORDER } from '@/lib/labels';
-import { useAppStore, type NewFridgeItem } from '@/lib/storage';
+import { useAppStore, type NewPantryItem } from '@/lib/storage';
 import type { IngredientCategory } from '@/lib/types';
 
-export default function FridgeScreen() {
-  const { fridge, addFridgeItem, removeFridgeItem } = useAppStore();
+export default function PantryScreen() {
+  const { pantry, addPantryItem, removePantryItem } = useAppStore();
   const [sheetVisible, setSheetVisible] = useState(false);
 
   const groups = CATEGORY_ORDER.map((category) => ({
     category,
-    items: fridge.filter((item) => item.category === category),
+    items: pantry.filter((item) => item.category === category),
   })).filter((group) => group.items.length > 0);
 
   return (
-    <Screen title="冰箱" subtitle={`已有 ${fridge.length} 样食材，菜单会优先用上它们`}>
+    <Screen
+      title="食库"
+      subtitle={`已有 ${pantry.length} 样食材，菜单里约一半餐次会优先用上它们`}>
       <SoftButton label="＋ 添加食材" onPress={() => setSheetVisible(true)} />
 
       {groups.length === 0 ? (
         <EmptyState
-          title="冰箱还是空的"
-          description="添加手头现有的食材，今日菜单会优先推荐能直接做的菜。"
+          title="食库还是空的"
+          description="家里的食材都记在这里 —— 米面粮油、水果干货、常温奶都算，不限于冰箱。菜单里大约一半餐次会优先用它，其余餐次会主动推荐新菜；缺的食材进采购清单。"
           actionLabel="添加第一样食材"
           onAction={() => setSheetVisible(true)}
         />
@@ -56,7 +58,7 @@ export default function FridgeScreen() {
                   </View>
                 }
                 trailing={
-                  <PlainButton label="删除" tone="danger" onPress={() => removeFridgeItem(item.id)} />
+                  <PlainButton label="删除" tone="danger" onPress={() => removePantryItem(item.id)} />
                 }
               />
             ))}
@@ -68,7 +70,7 @@ export default function FridgeScreen() {
         visible={sheetVisible}
         onClose={() => setSheetVisible(false)}
         onSubmit={(input) => {
-          addFridgeItem(input);
+          addPantryItem(input);
           setSheetVisible(false);
         }}
       />
@@ -83,7 +85,7 @@ function AddIngredientSheet({
 }: {
   visible: boolean;
   onClose: () => void;
-  onSubmit: (input: NewFridgeItem) => void;
+  onSubmit: (input: NewPantryItem) => void;
 }) {
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');

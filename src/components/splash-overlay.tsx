@@ -25,7 +25,7 @@ export function SplashOverlay() {
   const content = (
     <View style={styles.content}>
       <Text style={styles.title}>每日饮食</Text>
-      <Text style={styles.subtitle}>今天吃什么，交给冰箱</Text>
+      <Text style={styles.subtitle}>今天吃什么，交给食库</Text>
     </View>
   );
 

@@ -13,6 +13,10 @@ import { Spacing } from '@/constants/theme';
 import { GOAL_DESCRIPTIONS, GOAL_LABELS, PREFERENCE_LABELS, formatAmount } from '@/lib/labels';
 import {
   DEFAULT_MEMBER,
+  DISEASE_DISCLAIMER,
+  METABOLIC_TAGS,
+  METABOLIC_TAG_HINTS,
+  METABOLIC_TAG_LABELS,
   SPECIAL_TAGS,
   SPECIAL_TAG_HINTS,
   SPECIAL_TAG_LABELS,
@@ -24,7 +28,7 @@ import {
   portionLabel,
 } from '@/lib/members';
 import { useAppStore } from '@/lib/storage';
-import type { Goal, Member, Preference, SpecialTag } from '@/lib/types';
+import type { Goal, Member, MemberTag, Preference } from '@/lib/types';
 
 const GOALS: Goal[] = ['fatLoss', 'muscleGain', 'balanced'];
 const PREFERENCES: Preference[] = ['light', 'spicy', 'vegetarian', 'lowSugar'];
@@ -205,7 +209,7 @@ function parseAge(text: string): number {
   return Math.min(AGE_MAX, Number(digits));
 }
 
-function toggleSpecial(member: Member, tag: SpecialTag): Member {
+function toggleSpecial(member: Member, tag: MemberTag): Member {
   const special = member.special.includes(tag)
     ? member.special.filter((item) => item !== tag)
     : [...member.special, tag];
@@ -290,9 +294,37 @@ function MemberEditorSheet({
             </TagRow>
             {draft.special.length > 0 ? (
               <ThemedText type="caption" themeColor="textSecondary">
-                {draft.special.map((tag) => SPECIAL_TAG_HINTS[tag]).join('；')}
+                {SPECIAL_TAGS.filter((tag) => draft.special.includes(tag))
+                  .map((tag) => SPECIAL_TAG_HINTS[tag])
+                  .join('；')}
               </ThemedText>
             ) : null}
+          </View>
+
+          <View style={styles.field}>
+            <ThemedText type="caption" themeColor="textSecondary">
+              代谢疾病 · 可多选
+            </ThemedText>
+            <TagRow>
+              {METABOLIC_TAGS.map((tag) => (
+                <Chip
+                  key={tag}
+                  label={METABOLIC_TAG_LABELS[tag]}
+                  selected={draft.special.includes(tag)}
+                  onPress={() => onChange(toggleSpecial(draft, tag))}
+                />
+              ))}
+            </TagRow>
+            {METABOLIC_TAGS.some((tag) => draft.special.includes(tag)) ? (
+              <ThemedText type="caption" themeColor="textSecondary">
+                {METABOLIC_TAGS.filter((tag) => draft.special.includes(tag))
+                  .map((tag) => METABOLIC_TAG_HINTS[tag])
+                  .join('；')}
+              </ThemedText>
+            ) : null}
+            <ThemedText type="caption" themeColor="textSecondary">
+              {DISEASE_DISCLAIMER}
+            </ThemedText>
           </View>
 
           <PrimaryButton

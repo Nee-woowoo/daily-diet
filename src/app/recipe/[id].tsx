@@ -8,6 +8,7 @@ import { Tag, TagRow } from '@/components/ui/tag';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { cautions, exclusionLabels, exclusionReasons } from '@/lib/advice';
+import { DIET_LEVEL_LABELS, dietDimensions } from '@/lib/diet';
 import {
   formatAmount,
   GOAL_LABELS,
@@ -18,7 +19,13 @@ import {
   PREFERENCE_TONES,
   SPICE_LABELS,
 } from '@/lib/labels';
-import { householdPortions, memberSummaryLabel, portionLabel } from '@/lib/members';
+import {
+  DISEASE_DISCLAIMER,
+  hasMetabolicTag,
+  householdPortions,
+  memberSummaryLabel,
+  portionLabel,
+} from '@/lib/members';
 import { matchRecipe } from '@/lib/planner';
 import { getRecipe, scaleAmount } from '@/lib/recipes';
 import { stapleAmountLabel, stapleSuggestion } from '@/lib/staples';
@@ -53,6 +60,8 @@ export default function RecipeDetailScreen() {
   const staple = recipe.staple ? stapleSuggestion(recipe, profile) : undefined;
   const cautionList = cautions(recipe, profile);
   const excludedLabels = exclusionLabels(recipe, profile);
+  // 家里有慢病成员就显示免责提示 —— 即使这道菜一条提醒都没推出来（低等级 + 只有痛风时就是这样）。
+  const hasDiseaseMember = profile.members.some(hasMetabolicTag);
 
   return (
     <>
@@ -123,11 +132,31 @@ export default function RecipeDetailScreen() {
               ))}
             </TagRow>
           ) : null}
-          {recipe.pairing ? (
+          {/* `recipe.staple` 有值时，主食由下面「每人份量」那一行负责，而且可能按家庭成员换成
+              糙米饭 —— 再显示一遍 `pairing` 里的「配白米饭」会和它自相矛盾。今日页也是这么判的。 */}
+          {recipe.pairing && !recipe.staple ? (
             <ThemedText type="caption" themeColor="textSecondary">
               建议搭配：{recipe.pairing}
             </ThemedText>
           ) : null}
+        </Card>
+
+        <Card>
+          <View style={styles.matchHeader}>
+            <ThemedText type="headline">饮食维度</ThemedText>
+          </View>
+          <TagRow>
+            {dietDimensions(recipe).map((dimension) => (
+              <Tag
+                key={dimension.label}
+                label={`${dimension.label} ${DIET_LEVEL_LABELS[dimension.level]}`}
+                tone={dimension.level}
+              />
+            ))}
+          </TagRow>
+          <ThemedText type="caption" themeColor="textSecondary">
+            按配料和调料算出来的四档。标「高」的那一档，会被家里对应疾病的标签整道排除。
+          </ThemedText>
         </Card>
 
         <View style={styles.section}>
@@ -215,7 +244,7 @@ export default function RecipeDetailScreen() {
           </Card>
         </View>
 
-        {cautionList.length > 0 ? (
+        {cautionList.length > 0 || hasDiseaseMember ? (
           <View style={styles.section}>
             <SectionTitle>注意事项</SectionTitle>
             <Card>
@@ -224,6 +253,11 @@ export default function RecipeDetailScreen() {
                   {item.name}（{item.tag}）：{item.text}
                 </ThemedText>
               ))}
+              {hasDiseaseMember ? (
+                <ThemedText type="caption" themeColor="textSecondary">
+                  {DISEASE_DISCLAIMER}
+                </ThemedText>
+              ) : null}
             </Card>
           </View>
         ) : null}

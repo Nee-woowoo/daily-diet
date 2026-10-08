@@ -14,10 +14,20 @@ export type SpiceLevel = 'none' | 'mild' | 'hot';
 /** 体重方向就是 `Goal` —— 一位成员只能有一个，所以直接复用，标签和配色都现成。 */
 export type BodyTag = Goal;
 
-/** 成员的特殊状态，可多选。 */
+/** 成员的特殊状态，可多选。这些是**偏好**类的照顾（菜单按它加权），不是禁忌。 */
 export type SpecialTag = 'pregnancy' | 'growingChild' | 'seniorLight';
 
-export type MemberTag = BodyTag | SpecialTag;
+/**
+ * 慢性代谢疾病，可多选。与 `SpecialTag` 不同，这些是**禁忌**：命中就整道排除（见
+ * `diet` 的四个分级函数与 `advice.DISEASE_RULES`）。
+ */
+export type MetabolicTag = 'gout' | 'insulinResistance' | 'hypertension' | 'hyperlipidemia' | 'ckd';
+
+/**
+ * 成员身上能挂的全部标签。两类共用一个存储字段 `Member.special`：拆成两个字段就要在
+ * `adviceKeysFor` / `memberSummaryLabel` / `readSpecial` 三处各拼一次，漏一处疾病就静默不生效。
+ */
+export type MemberTag = BodyTag | SpecialTag | MetabolicTag;
 
 /**
  * 菜谱给「某类人」写说明时用的键：成员标签，外加由年龄派生、用户选不到的 `'toddler'`
@@ -36,8 +46,8 @@ export interface Member {
   age: number;
   /** 体重方向，单选。 */
   goal: Goal;
-  /** 特殊状态，多选。 */
-  special: SpecialTag[];
+  /** 特殊状态与慢性代谢疾病，多选。字段名保留 `special` 是为了不改存储键、不做数据迁移。 */
+  special: MemberTag[];
 }
 
 export interface Ingredient {
@@ -102,6 +112,9 @@ export interface Recipe {
   /**
    * 对某类成员的硬性禁忌 + 原因，例如 `{ pregnancy: '生食' }`。只写真的不能吃的（生食/酒精），
    * 不写口味偏好 —— 口味走全家 `Profile.preferences`，那只是降权。
+   *
+   * 代谢疾病的禁忌**不要**写在这里：那四个等级是从配料和调料算出来的（`diet` 的 `purineLevel`
+   * 等），手写一份会和配方打架。
    */
   exclusions?: Partial<Record<AdviceKey, string>>;
   /** 今日页「兼顾说明」里的一句话；`{name}` 会替换成成员的称呼。 */

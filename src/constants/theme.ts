@@ -44,6 +44,10 @@ export const TagColors = {
   ready: { fg: '#1B7F45', bg: '#E6F7ED' },
   missing: { fg: '#A05500', bg: '#FFF3E0' },
   neutral: { fg: '#5A5F66', bg: '#F0F0F3' },
+  /** 饮食维度（嘌呤/升糖/钠/饱和脂肪）的三档：低绿、中黄、高红，与 `unsafe` 同色系。 */
+  low: { fg: '#1B7F45', bg: '#E6F7ED' },
+  medium: { fg: '#A05500', bg: '#FFF3E0' },
+  high: { fg: '#B3261E', bg: '#FBE9E7' },
 } as const;
 
 export type TagTone = keyof typeof TagColors;

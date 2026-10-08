@@ -1,6 +1,6 @@
 import { isExcluded } from './advice';
-import { contradictsPreferences, isCalciumRich, isHighOil, isProteinRich } from './diet';
-import { bodyTagOf } from './members';
+import { contradictsPreferences, diseaseRule, isCalciumRich, isHighOil, isProteinRich } from './diet';
+import { METABOLIC_TAGS, bodyTagOf } from './members';
 import { RECIPES } from './recipes';
 import type {
   DayPlan,
@@ -198,6 +198,14 @@ function memberTagFit(recipe: Recipe, member: Member): number {
     if (recipe.oilLevel === 'low') score += 1;
     if (isHighOil(recipe)) score -= 1.5;
     if (recipe.spice === 'mild') score -= 0.5;
+  }
+  // 代谢疾病：低等级给 0.5，与孕期那个「少油 +0.5」同量级；中/高不给分 —— 高等级对这家人已经被
+  // `isExcluded` 整道排除了，轮不到打分。
+  //
+  // 五个标签全命中低等级是 +2.5，被 `memberFit` 的 clamp 收成 +2：这些加分本来就只该是微调，
+  // 不该盖过冰箱覆盖度那两项。也因此多项叠加不是线性的（痛风+高血压 ≈ 痛风），这是有意的。
+  for (const tag of METABOLIC_TAGS) {
+    if (member.special.includes(tag) && diseaseRule(recipe, tag)?.level === 'low') score += 0.5;
   }
   return score;
 }

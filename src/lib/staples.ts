@@ -128,22 +128,47 @@ interface StapleDraft {
   kcalHousehold: number;
 }
 
+/**
+ * 家里有胰岛素抵抗的成员时，另配的白米饭换成糙米饭。
+ *
+ * **全家一起换，不是给某个人单独换**：一锅饭是分不出来的，「妈妈那份换成糙米」没法下锅。所以判据
+ * 是「有谁勾了胰岛素抵抗」，结果是桌上唯一的那碗饭。
+ *
+ * 只换名字，克数不动（两者的 base amount 都是 150 g），**但热量会跟着变**：糙米 112 千卡/100 克
+ * 对白米 116，每 100 克差 4 千卡，且随人份数线性放大（2.5 人份的 375 克就差 15 千卡）。所以主食卡
+ * 上的合计是会变的 ——那是真的差，不是取整误差，别去追平它。要算的话只有一个口径：克数 × 每 100 克。
+ *
+ * 够不着的两处，写在计划里说清楚了：早餐的主食是本菜的主料（`fromDish`，如小米南瓜粥的小米），
+ * 不经过这张表；杂粮饭和糙米饭本来就是低 GI，不需要换。
+ */
+const GI_STAPLE_SWAP: Record<string, string> = { 白米饭: '糙米饭' };
+
+function stapleNameFor(name: string, profile: Profile): string {
+  const needsLowGi = profile.members.some((member) =>
+    member.special.includes('insulinResistance'),
+  );
+  return needsLowGi ? (GI_STAPLE_SWAP[name] ?? name) : name;
+}
+
 function draftFor(recipe: Recipe, profile: Profile): StapleDraft | undefined {
   const staple = stapleOf(recipe);
   if (!staple) return undefined;
 
   const fromDish = recipe.staple === undefined;
   const household = scaleAmount(staple.amount, staple.unit, stapleFactorSum(profile, fromDish));
+  // 绝不写回 `staple`：它是 `recipes.ts` 里的模块级常量（`WHITE_RICE`），改了会顺着引用漏到整个
+  // 会话后面的每一次渲染里。这里只做一个新的 suggestion 对象。
+  const name = stapleNameFor(staple.name, profile);
 
   return {
     suggestion: {
-      name: staple.name,
+      name,
       amount: household,
       unit: staple.unit,
       fromDish,
     },
-    kcalStandard: stapleKcal(staple.name, staple.amount, staple.unit),
-    kcalHousehold: stapleKcal(staple.name, household, staple.unit),
+    kcalStandard: stapleKcal(name, staple.amount, staple.unit),
+    kcalHousehold: stapleKcal(name, household, staple.unit),
   };
 }
 

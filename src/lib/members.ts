@@ -1,7 +1,14 @@
-import type { TagTone } from '@/constants/theme';
-
 import { GOAL_LABELS, PREFERENCE_LABELS, formatAmount } from './labels';
-import type { AdviceKey, Goal, Member, Preference, Profile, SpecialTag } from './types';
+import type {
+  AdviceKey,
+  Goal,
+  Member,
+  MemberTag,
+  MetabolicTag,
+  Preference,
+  Profile,
+  SpecialTag,
+} from './types';
 
 /**
  * The household: who is at the table, how much each of them eats, and how the rest of the app talks
@@ -19,17 +26,74 @@ export const SPECIAL_TAG_LABELS: Record<SpecialTag, string> = {
   seniorLight: '长辈清淡',
 };
 
-export const SPECIAL_TAG_TONES: Record<SpecialTag, TagTone> = {
-  pregnancy: 'pregnancy',
-  growingChild: 'child',
-  seniorLight: 'light',
-};
-
 export const SPECIAL_TAG_HINTS: Record<SpecialTag, string> = {
   pregnancy: '忌生食、酒精和高汞鱼，菜单会自动排除这类菜',
   growingChild: '正在长身体，优先蛋白质和钙',
   seniorLight: '口味清淡、少油少盐',
 };
+
+/**
+ * 慢性代谢疾病，可多选。勾上就按 `diet` 的四维分级做硬性排除，与孕期同一套机制。
+ *
+ * 顺序就是界面与文案的优先级顺序（`adviceKeysFor`），从「最该被说出来」往下排。
+ */
+export const METABOLIC_TAGS: MetabolicTag[] = [
+  'gout',
+  'insulinResistance',
+  'hypertension',
+  'hyperlipidemia',
+  'ckd',
+];
+
+/**
+ * Chip 上的短名。括号里的解释（如「糖尿病前期」）放在 `METABOLIC_TAG_HINTS` 里，因为长标签在
+ * Chip 里会折行。
+ */
+export const METABOLIC_TAG_LABELS: Record<MetabolicTag, string> = {
+  gout: '痛风',
+  insulinResistance: '胰岛素抵抗',
+  hypertension: '高血压',
+  hyperlipidemia: '高血脂',
+  ckd: '慢性肾病',
+};
+
+export const METABOLIC_TAG_HINTS: Record<MetabolicTag, string> = {
+  gout: '高尿酸，忌高嘌呤：海鲜、老火汤和内脏类会被排除',
+  insulinResistance: '含糖尿病前期，忌高升糖：精制主食和含糖菜会被排除',
+  hypertension: '忌高钠：重盐和发酵酱料的菜会被排除',
+  hyperlipidemia: '忌高饱和脂肪：带皮禽肉、肥肉和老火汤会被排除',
+  ckd: '慢性肾病按限钠处理（与高血压同口径）；蛋白、钾、磷的限量因人而异，请遵医嘱',
+};
+
+/** 表单和摘要里的完整标签顺序：特殊状态在前，代谢疾病在后。 */
+export const STATUS_TAGS: MemberTag[] = [...SPECIAL_TAGS, ...METABOLIC_TAGS];
+
+/**
+ * 标签的中文名，一张表管到底。`Record<MemberTag, string>` 是硬约束：`types.ts` 里加一个新标签，
+ * 这里会立刻报缺键 —— 这正是想要的（上一版就吃过「标签加了、文案没跟上」的亏）。
+ */
+export const MEMBER_TAG_LABELS: Record<MemberTag, string> = {
+  ...GOAL_LABELS,
+  ...SPECIAL_TAG_LABELS,
+  ...METABOLIC_TAG_LABELS,
+};
+
+/** 这位成员身上挂着的标签的名字，按 `STATUS_TAGS` 的规范顺序。 */
+function tagLabelsOf(member: Member): string[] {
+  return STATUS_TAGS.filter((tag) => member.special.includes(tag)).map(
+    (tag) => MEMBER_TAG_LABELS[tag],
+  );
+}
+
+/**
+ * 代谢疾病标签下方那行小字。写在 `members.ts` 而不是各页面里，两处（录入页与详情页）共用一份。
+ */
+export const DISEASE_DISCLAIMER = '饮食建议仅供参考，具体遵医嘱';
+
+/** 这位成员有没有勾任何代谢疾病 —— 详情页据此决定要不要显示免责提示。 */
+export function hasMetabolicTag(member: Member): boolean {
+  return METABOLIC_TAGS.some((tag) => member.special.includes(tag));
+}
 
 const GOALS: Goal[] = ['fatLoss', 'muscleGain', 'balanced'];
 /** 全家口味偏好的规范顺序，取自 `labels.ts` 里那份表，免得两处各写一遍。 */
@@ -127,23 +191,29 @@ export function memberSummaryLabel(member: Member): string {
   const parts = [
     member.age > 0 ? `${member.age} 岁` : '年龄待填',
     GOAL_LABELS[bodyTagOf(member)],
-    ...SPECIAL_TAGS.filter((tag) => member.special.includes(tag)).map(
-      (tag) => SPECIAL_TAG_LABELS[tag],
-    ),
+    ...tagLabelsOf(member),
   ];
   return parts.join(' · ');
 }
 
 /**
- * 该成员参与规则的身份键，按优先级排列：孕期 > 幼儿 > 发育期儿童 > 减脂 > 增肌 > 长辈清淡 > 均衡。
+ * 该成员参与规则的身份键，按优先级排列：
+ * 孕期 > 幼儿 > 痛风 > 胰岛素抵抗 > 高血压 > 高血脂 > 慢性肾病 > 发育期儿童 > 减脂 > 增肌 > 长辈清淡 > 均衡。
+ *
  * 排除规则检查**所有**键（安全从严），文案只取第一个有内容的键（不啰嗦）。永不为空 ——
  * 体重方向兜在最后。
+ *
+ * 疾病排在 `growingChild` 之前，是因为「卡片上那一行」只放得下一句（`pickAdvice` 取第一个有内容的
+ * 键）：一位发育期的痛风孩子，该先看到的是「嘌呤低」而不是「蛋白质够不够」。
  */
 export function adviceKeysFor(member: Member): AdviceKey[] {
   const goal = bodyTagOf(member);
   const keys: AdviceKey[] = [];
   if (member.special.includes('pregnancy')) keys.push('pregnancy');
   if (isToddler(member)) keys.push('toddler');
+  for (const tag of METABOLIC_TAGS) {
+    if (member.special.includes(tag)) keys.push(tag);
+  }
   if (member.special.includes('growingChild')) keys.push('growingChild');
   if (goal === 'fatLoss') keys.push('fatLoss');
   if (goal === 'muscleGain') keys.push('muscleGain');
@@ -185,9 +255,11 @@ function readAge(value: unknown): number {
   return Math.min(120, Math.max(0, Math.trunc(value)));
 }
 
-function readSpecial(value: unknown): SpecialTag[] {
+function readSpecial(value: unknown): MemberTag[] {
   if (!Array.isArray(value)) return [];
-  return SPECIAL_TAGS.filter((tag) => value.includes(tag));
+  // Normalizing against `STATUS_TAGS` (not just the special states) is what lets disease tags survive
+  // a round-trip through storage.
+  return STATUS_TAGS.filter((tag) => value.includes(tag));
 }
 
 function readMember(value: unknown): Member | null {

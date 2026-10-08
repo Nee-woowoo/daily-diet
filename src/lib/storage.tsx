@@ -10,12 +10,14 @@ import {
 } from 'react';
 
 import { generatePlan, todayKey } from './planner';
+import { buildShoppingList, fridgeAmountLabel, type ShoppingLine } from './shopping';
 import type { DayPlan, FridgeItem, IngredientCategory, Profile } from './types';
 
 const KEYS = {
   profile: 'daily-meals/profile/v1',
   fridge: 'daily-meals/fridge/v1',
   plan: 'daily-meals/plan/v1',
+  shopping: 'daily-meals/shopping/v1',
 } as const;
 
 /** Used before the user has saved the 录入 form, so the app works on first launch. */
@@ -32,6 +34,16 @@ export interface NewFridgeItem {
   category: IngredientCategory;
 }
 
+/**
+ * What the shopping list remembers: 「已买到」 is a statement about today, so it is stamped with the
+ * day it was made on, exactly like `DayPlan.date`. Checks are kept by ingredient name while the menu
+ * changes underneath them, and drop when the day rolls over.
+ */
+interface StoredChecks {
+  date: string;
+  keys: string[];
+}
+
 interface AppStore {
   /** False until AsyncStorage has been read, so screens do not flash empty states. */
   hydrated: boolean;
@@ -44,6 +56,13 @@ interface AppStore {
   saveProfile: (next: Omit<Profile, 'savedAt'>) => void;
   /** Rebuilds today's menu, keeping the current profile and fridge. */
   regeneratePlan: () => void;
+  /** Today's missing ingredients merged across meals, each flagged with whether it is checked off. */
+  shoppingList: ShoppingLine[];
+  /** How many lines are still unchecked — the 购物 tab badge. */
+  shoppingPending: number;
+  toggleBought: (key: string) => void;
+  /** Writes the checked-off lines into the fridge as one batch; they then leave the list. */
+  addBoughtToFridge: () => void;
 }
 
 const AppStoreContext = createContext<AppStore | null>(null);
@@ -73,15 +92,18 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile>(DEFAULT_PROFILE);
   const [fridge, setFridge] = useState<FridgeItem[]>([]);
   const [plan, setPlan] = useState<DayPlan | null>(null);
+  /** Normalized names of the shopping lines the user has already bought, for today. */
+  const [bought, setBought] = useState<string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      const [storedProfile, storedFridge, storedPlan] = await Promise.all([
+      const [storedProfile, storedFridge, storedPlan, storedChecks] = await Promise.all([
         readJson<Profile>(KEYS.profile),
         readJson<FridgeItem[]>(KEYS.fridge),
         readJson<DayPlan>(KEYS.plan),
+        readJson<StoredChecks>(KEYS.shopping),
       ]);
       if (cancelled) return;
 
@@ -89,10 +111,14 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       const nextFridge = storedFridge ?? [];
       // A stored plan is only valid on the day it was generated for.
       const isToday = storedPlan !== null && storedPlan.date === todayKey();
+      // Same rule for the checks. Yesterday's 「已买」 says nothing about today's shopping, and
+      // carrying it over would light up an ingredient the user has not actually bought this time.
+      const checksAreToday = storedChecks !== null && storedChecks.date === todayKey();
 
       setProfile(nextProfile);
       setFridge(nextFridge);
       setPlan(isToday ? storedPlan : generatePlan(nextProfile, nextFridge, storedPlan));
+      setBought(checksAreToday ? storedChecks.keys : []);
       setHydrated(true);
     })();
 
@@ -113,6 +139,30 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (hydrated && plan) writeJson(KEYS.plan, plan);
   }, [hydrated, plan]);
+
+  useEffect(() => {
+    if (hydrated) writeJson(KEYS.shopping, { date: todayKey(), keys: bought } satisfies StoredChecks);
+  }, [hydrated, bought]);
+
+  // The shopping list is derived, never stored, so it always describes the plan the 今日 tab renders.
+  // Checks are only read for lines that are on the list, so a name whose ingredient stops being
+  // missing is simply inert until it comes back — which is the wanted behaviour: 「我今天已经买过
+  // 番茄」 stays true whether or not 番茄 is still on today's list.
+  //
+  // Do not add any setState to this render body. An earlier version pruned the checks during render
+  // (dropping the ones no longer on the list, guarded by comparing the list's identity) and it
+  // looped the app into "Too many re-renders": a render-phase update re-runs the hooks, and with
+  // `experiments.reactCompiler` on, the memoized list came back as a new object on every pass, so
+  // the guard never matched and React hit its re-render limit.
+  const missing = useMemo(() => buildShoppingList(plan, fridge, profile), [plan, fridge, profile]);
+  const shoppingList = useMemo(
+    () => missing.map((line) => ({ ...line, bought: bought.includes(line.key) })),
+    [missing, bought],
+  );
+  const shoppingPending = useMemo(
+    () => shoppingList.filter((line) => !line.bought).length,
+    [shoppingList],
+  );
 
   const addFridgeItem = useCallback((input: NewFridgeItem) => {
     setFridge((current) => [{ id: createId(), addedAt: Date.now(), ...input }, ...current]);
@@ -139,6 +189,29 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     setPlan((current) => generatePlan(profile, fridge, current));
   }, [profile, fridge]);
 
+  const toggleBought = useCallback((key: string) => {
+    setBought((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    );
+  }, []);
+
+  // 「缺」 is defined as 「冰箱里没有」, so writing these names in removes them from the list, and the
+  // prune above drops their checks — no second bookkeeping step is needed here.
+  const addBoughtToFridge = useCallback(() => {
+    const picked = shoppingList.filter((line) => line.bought);
+    if (picked.length === 0) return;
+    setFridge((current) => [
+      ...picked.map((line) => ({
+        id: createId(),
+        addedAt: Date.now(),
+        name: line.name,
+        amount: fridgeAmountLabel(line),
+        category: line.category,
+      })),
+      ...current,
+    ]);
+  }, [shoppingList]);
+
   const value = useMemo<AppStore>(
     () => ({
       hydrated,
@@ -150,6 +223,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       clearFridge,
       saveProfile,
       regeneratePlan,
+      shoppingList,
+      shoppingPending,
+      toggleBought,
+      addBoughtToFridge,
     }),
     [
       hydrated,
@@ -161,6 +238,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       clearFridge,
       saveProfile,
       regeneratePlan,
+      shoppingList,
+      shoppingPending,
+      toggleBought,
+      addBoughtToFridge,
     ],
   );
 

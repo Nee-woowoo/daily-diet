@@ -14,7 +14,7 @@ export interface Ingredient {
   amount: number;
   unit: IngredientUnit;
   category: IngredientCategory;
-  /** Optional items never count as missing ingredients. */
+  /** Optional main ingredients are still matched against the fridge; the UI marks them 可选. */
   optional?: boolean;
 }
 

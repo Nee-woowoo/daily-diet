@@ -20,7 +20,7 @@ import { useAppStore } from '@/lib/storage';
 import type { MealSlot, Recipe } from '@/lib/types';
 
 export default function TodayScreen() {
-  const { hydrated, plan, fridge, profile, regeneratePlan } = useAppStore();
+  const { hydrated, plan, fridge, profile, regeneratePlan, shoppingList } = useAppStore();
 
   if (!hydrated || !plan) {
     return (
@@ -71,6 +71,22 @@ export default function TodayScreen() {
           <ThemedText type="headline">还没设置身体目标</ThemedText>
           <ThemedText type="caption" themeColor="textSecondary">
             去「录入」填一下人数、目标和口味偏好，菜单会按减脂或增肌重新筛选。点击前往 ›
+          </ThemedText>
+        </PressableCard>
+      ) : null}
+
+      {shoppingList.length > 0 ? (
+        <PressableCard
+          accessibilityLabel="打开采购清单"
+          onPress={() => router.navigate('/shopping')}>
+          <View style={styles.mealHeader}>
+            <ThemedText type="headline">采购清单</ThemedText>
+            <ThemedText type="caption" themeColor="textTertiary">
+              查看 ›
+            </ThemedText>
+          </View>
+          <ThemedText type="caption" themeColor="textSecondary">
+            三道菜还缺 {shoppingList.length} 样食材，买到的勾上，一键放进冰箱。
           </ThemedText>
         </PressableCard>
       ) : null}

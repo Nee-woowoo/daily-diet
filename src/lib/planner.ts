@@ -1,5 +1,5 @@
 import { RECIPES } from './recipes';
-import type { DayPlan, FridgeItem, Goal, Preference, Profile, Recipe } from './types';
+import type { DayPlan, FridgeItem, Goal, Ingredient, Preference, Profile, Recipe } from './types';
 
 /**
  * Fridge names that stand in for an ingredient written differently on the recipe side.
@@ -97,20 +97,38 @@ function matchesFridge(ingredientName: string, available: Set<string>): boolean 
   return false;
 }
 
-/** Splits a recipe's main ingredients into what the fridge covers and what is missing. */
-export function matchRecipe(recipe: Recipe, fridge: FridgeItem[]): RecipeMatch {
-  const available = new Set(fridge.map((item) => normalizeName(item.name)));
-  return matchAgainst(recipe, available);
+function availableNames(fridge: FridgeItem[]): Set<string> {
+  return new Set(fridge.map((item) => normalizeName(item.name)));
 }
 
+/** Main ingredients the fridge does not cover, in `recipe.ingredients` order. */
+function missingAgainst(recipe: Recipe, available: Set<string>): Ingredient[] {
+  return recipe.ingredients.filter((ingredient) => !matchesFridge(ingredient.name, available));
+}
+
+/**
+ * The same split as `matchRecipe`, but keeping the ingredients themselves: the shopping list needs
+ * their amounts (to add up what is missing across meals) and their categories (to file what the
+ * user buys into the right fridge group).
+ */
+export function missingIngredients(recipe: Recipe, fridge: FridgeItem[]): Ingredient[] {
+  return missingAgainst(recipe, availableNames(fridge));
+}
+
+/** Splits a recipe's main ingredients into what the fridge covers and what is missing. */
+export function matchRecipe(recipe: Recipe, fridge: FridgeItem[]): RecipeMatch {
+  return matchAgainst(recipe, availableNames(fridge));
+}
+
+/** Both entry points share `missingAgainst`, so the counts and the shopping list cannot drift. */
 function matchAgainst(recipe: Recipe, available: Set<string>): RecipeMatch {
-  const names = recipe.ingredients.map((ingredient) => ingredient.name);
-  const missing = names.filter((name) => !matchesFridge(name, available));
+  const missing = missingAgainst(recipe, available);
+  const totalCount = recipe.ingredients.length;
   return {
-    readyCount: names.length - missing.length,
-    totalCount: names.length,
-    ratio: names.length === 0 ? 0 : (names.length - missing.length) / names.length,
-    missing,
+    readyCount: totalCount - missing.length,
+    totalCount,
+    ratio: totalCount === 0 ? 0 : (totalCount - missing.length) / totalCount,
+    missing: missing.map((ingredient) => ingredient.name),
   };
 }
 
@@ -208,7 +226,7 @@ export function rankRecipes(
   profile: Profile,
   options: ScoreOptions = {},
 ): RankedRecipe[] {
-  const available = new Set(fridge.map((item) => normalizeName(item.name)));
+  const available = availableNames(fridge);
   return applyPreferenceFilter(pool, profile)
     .map((recipe) => {
       const match = matchAgainst(recipe, available);

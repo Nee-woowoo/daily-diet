@@ -17,6 +17,10 @@ import {
   METABOLIC_TAGS,
   METABOLIC_TAG_HINTS,
   METABOLIC_TAG_LABELS,
+  PREGNANCY_WEEK_MAX,
+  PREGNANCY_WEEK_MIN,
+  SEXES,
+  SEX_LABELS,
   SPECIAL_TAGS,
   SPECIAL_TAG_HINTS,
   SPECIAL_TAG_LABELS,
@@ -210,11 +214,29 @@ function parseAge(text: string): number {
   return Math.min(AGE_MAX, Number(digits));
 }
 
+/**
+ * 孕周输入：只留数字，留空或超出 1–40 一律当「没填」。
+ *
+ * **不**像 `parseAge` 那样夹到边界：把 45 夹成 40 是替用户编了一个「孕晚期」，而丢掉只会退回
+ * 界面上写明的孕中期兜底。代价是输入 45 时那一格会变空 —— 用户看到的和存下来的始终一致。
+ */
+function parsePregnancyWeek(text: string): number | undefined {
+  const digits = text.replace(/[^0-9]/g, '');
+  if (digits.length === 0) return undefined;
+  const week = Number(digits);
+  return week >= PREGNANCY_WEEK_MIN && week <= PREGNANCY_WEEK_MAX ? week : undefined;
+}
+
 function toggleSpecial(member: Member, tag: MemberTag): Member {
   const special = member.special.includes(tag)
     ? member.special.filter((item) => item !== tag)
     : [...member.special, tag];
-  return { ...member, special };
+  // 取消「孕期」时把孕周一起丢掉：留着它的话，下次勾回来会冒出一个用户早就忘掉的旧数字。
+  return {
+    ...member,
+    special,
+    pregnancyWeek: special.includes('pregnancy') ? member.pregnancyWeek : undefined,
+  };
 }
 
 /**
@@ -264,6 +286,27 @@ function MemberEditorSheet({
 
           <View style={styles.field}>
             <ThemedText type="caption" themeColor="textSecondary">
+              性别 · 单选
+            </ThemedText>
+            <TagRow>
+              {SEXES.map((sex) => (
+                <Chip
+                  key={sex}
+                  label={SEX_LABELS[sex]}
+                  selected={draft.sex === sex}
+                  // 再点一下取消 —— 「不填」是个合法状态，不是要逼用户二选一。
+                  onPress={() => onChange({ ...draft, sex: draft.sex === sex ? undefined : sex })}
+                />
+              ))}
+            </TagRow>
+            <ThemedText type="caption" themeColor="textSecondary">
+              参考摄入量的能量、蛋白质、铁都分男女两档（轻身体活动）。不填就按两档中值估，今日目标
+              里会写明。
+            </ThemedText>
+          </View>
+
+          <View style={styles.field}>
+            <ThemedText type="caption" themeColor="textSecondary">
               体重方向 · 单选
             </ThemedText>
             <View style={styles.options}>
@@ -301,6 +344,26 @@ function MemberEditorSheet({
               </ThemedText>
             ) : null}
           </View>
+
+          {/* 孕周只在勾了「孕期」时出现：没勾孕期的人填孕周没有意义，多一格只会让人犹豫。 */}
+          {draft.special.includes('pregnancy') ? (
+            <View style={styles.field}>
+              <TextField
+                label="孕周（可选）"
+                value={draft.pregnancyWeek ? String(draft.pregnancyWeek) : ''}
+                onChangeText={(text) =>
+                  onChange({ ...draft, pregnancyWeek: parsePregnancyWeek(text) })
+                }
+                placeholder={`${PREGNANCY_WEEK_MIN}–${PREGNANCY_WEEK_MAX}，留空按孕中期算`}
+                keyboardType="number-pad"
+                returnKeyType="done"
+              />
+              <ThemedText type="caption" themeColor="textSecondary">
+                孕早/中/晚期的热量与蛋白质加成不一样，填了才分得清。留空按孕中期（14–27 周）算，
+                今日目标里会写明。
+              </ThemedText>
+            </View>
+          ) : null}
 
           <View style={styles.field}>
             <ThemedText type="caption" themeColor="textSecondary">

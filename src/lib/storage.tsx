@@ -33,7 +33,7 @@ const KEYS = {
   profile: 'daily-meals/profile/v1',
   pantry: 'daily-meals/pantry/v1',
   /**
-   * v1 → v2：`DayPlan.meals` 从「一餐一个 id」变成「一餐一个 id 数组」（AI 一餐 2–3 个组成部分）。
+   * v1 → v2：`DayPlan.meals` 从「一餐一个 id」变成「一餐一个 id 数组」（AI 一餐 2–4 个组成部分）。
    * 升键而不是兼容两种形状 —— 旧的当天缓存整份读不到，水合走重算（用户已同意「旧的当天缓存作废」）。
    */
   plan: 'daily-meals/plan/v2',

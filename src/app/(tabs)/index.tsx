@@ -16,7 +16,7 @@ import {
   mealRoleLabel,
 } from '@/lib/labels';
 import { householdLabel, householdPortionsLabel, needsMigrationCheck } from '@/lib/members';
-import { achievement, dayNutrition, mealTotals, nutritionTarget } from '@/lib/nutrition';
+import { achievement, dayNutrition, foodGroupAmount, mealTotals, nutritionTarget } from '@/lib/nutrition';
 import { matchRecipe, todayLabel } from '@/lib/planner';
 import { getRecipe } from '@/lib/recipes';
 import {
@@ -70,7 +70,7 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
  * 一餐里的一个组成部分：整行可点，进详情页看做法。
  *
  * 行的形状与「今日主食」卡里的 `CardRow` 一致（左侧名称、右侧数值、行间发丝线），只是整行包在
- * `Pressable` 里 —— 一餐有 2–3 个组成部分，点整张卡片已经没法表达「点开哪一道」。
+ * `Pressable` 里 —— 一餐有 2–4 个组成部分，点整张卡片已经没法表达「点开哪一道」。
  */
 function DishRow({
   label,
@@ -131,7 +131,7 @@ export default function TodayScreen() {
     );
   }
 
-  // 每个槽位是 2–3 个组成部分（本地路径只有一道，数组长度 1）。解析不出的 id 与其它消费方一样静默跳过。
+  // 每个槽位是 2–4 个组成部分（本地路径只有一道，数组长度 1）。解析不出的 id 与其它消费方一样静默跳过。
   const meals = MEAL_SLOTS.map((slot) => ({
     slot,
     recipes: plan.meals[slot]
@@ -152,6 +152,9 @@ export default function TodayScreen() {
         }),
       )
     : '';
+  // 食物类别那几行的出处由库里 `foodGroupBasis` 合成（去重后只写一次，不然 12 行里会各抄一遍
+  // 「按各成员年龄段分别取宝塔（…）」）；prompt 里送出去的是同一句。
+  const foodGroupBases = target.foodGroupsBasis;
   // 一次算一次：这道菜为什么被排除，整页只需要一个结论。
   const excluded = excludedRecipes(profile);
   const excludedReasons = excluded
@@ -244,7 +247,12 @@ export default function TodayScreen() {
       ) : null}
 
       {/* 今日目标 + 今天这份菜单的达成情况。原来那张「三餐菜品合计」卡的全家合计行并到了这里：
-          两处各报一个当天总数，口径迟早对不上。 */}
+          两处各报一个当天总数，口径迟早对不上。
+
+          这块卡片本身不改判定 —— 数字全部来自 `nutritionTarget`，而那是「年龄 × 性别 × 体重方向 ×
+          特殊状态 → 查 DRIs / 宝塔」的唯一一处翻译。卡片的职责只剩**把每个数字的来历写在它旁边**：
+          「热量 1800 千卡 · 依据 DRIs 2023 能量 · 减脂 −400 千卡」。下方单独列食物类别目标，是因为
+          指南管的是「一天吃够 300g 蔬菜没有」，那是任何宏量数字都替代不了的一层。 */}
       <Card>
         <View style={styles.mealHeader}>
           <ThemedText type="headline">今日目标</ThemedText>
@@ -256,12 +264,64 @@ export default function TodayScreen() {
             )}
           </TagRow>
         </View>
-        <ThemedText type="body">
-          热量约 {target.kcal} 千卡 · 蛋白质约 {target.protein}g
-        </ThemedText>
-        <ThemedText type="body">
-          碳水约 {target.carbs}g · 脂肪约 {target.fat}g · 纤维约 {target.fiber}g
-        </ThemedText>
+
+        {/* 逐位成员一行：数字和它自己的依据绑在一起。全家合计（`target.kcal` 等）降到最后一行 ——
+            它只是各成员相加，单独摆在最上面反而像是「你家的目标」而不是「各自目标之和」。 */}
+        <View>
+          {target.members.map((member, index) => (
+            <CardRow
+              key={index}
+              divider={index > 0}
+              label={
+                <View style={styles.memberBlock}>
+                  <ThemedText type="body">
+                    {member.name} · {member.summary}
+                  </ThemedText>
+                  <ThemedText type="caption" themeColor="textSecondary">
+                    热量 {member.kcal} 千卡 · {member.kcalBasis}
+                  </ThemedText>
+                  <ThemedText type="caption" themeColor="textSecondary">
+                    蛋白质 {member.protein}g · {member.proteinBasis}
+                  </ThemedText>
+                  <ThemedText type="caption" themeColor="textSecondary">
+                    {joinParts([
+                      `碳水 ${member.carbs}g${member.carbBasis ? `（${member.carbBasis}）` : ''}`,
+                      `脂肪 ${member.fat}g`,
+                      `纤维 ${member.fiber}g`,
+                    ])}
+                  </ThemedText>
+                  {member.notes.map((note, noteIndex) => (
+                    <ThemedText
+                      key={noteIndex}
+                      type="caption"
+                      themeColor="textTertiary">
+                      {note}
+                    </ThemedText>
+                  ))}
+                </View>
+              }
+            />
+          ))}
+        </View>
+
+        {target.foodGroups.length > 0 ? (
+          <View style={styles.memberBlock}>
+            <ThemedText type="small" themeColor="textSecondary">
+              全家一天的食物类别
+            </ThemedText>
+            {target.foodGroups.map((group) => (
+              <ThemedText key={group.key} type="caption" themeColor="textSecondary">
+                {group.label} {foodGroupAmount(group)}
+                {group.note ? `（${group.note}）` : ''}
+              </ThemedText>
+            ))}
+            <ThemedText type="caption" themeColor="textTertiary">
+              依据：{foodGroupBases}。这是全家一天的量，不是每人份；一张合桌的菜单没法按人头分摊蔬菜，
+              所以它只是目标，不做达成率。
+            </ThemedText>
+          </View>
+        ) : null}
+
         {nutrition ? (
           <>
             <ThemedText type="caption" themeColor="textSecondary">
@@ -271,7 +331,7 @@ export default function TodayScreen() {
                 nutrition.household.carbs === null ? null : `碳水 ${Math.round(nutrition.household.carbs)}g`,
                 nutrition.household.fat === null ? null : `脂肪 ${Math.round(nutrition.household.fat)}g`,
                 nutrition.household.fiber === null ? null : `纤维 ${Math.round(nutrition.household.fiber)}g`,
-              ])}`}
+              ])}；全家合计目标 ${target.kcal} 千卡、蛋白质 ${target.protein}g`}
             </ThemedText>
             {achievementParts.length > 0 ? (
               <ThemedText type="caption" themeColor="textSecondary">
@@ -281,7 +341,11 @@ export default function TodayScreen() {
           </>
         ) : null}
         <ThemedText type="caption" themeColor="textSecondary">
-          按每位成员的年龄、体重方向与特殊状态估算，仅供参考；特殊疾病请遵医嘱。
+          依据《中国居民膳食指南（2022）》与《中国居民膳食营养素参考摄入量（2023
+          版）》，仅供参考；特殊疾病请遵医嘱。
+        </ThemedText>
+        <ThemedText type="caption" themeColor="textTertiary">
+          活动量统一按轻身体活动算（表单里不选）；本 app 没有身高体重，所以这是参考值，不是处方。
         </ThemedText>
       </Card>
 
@@ -512,6 +576,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  /** 一位成员那几行（或食物类别那块）：行距压紧一点，因为里面每行都是一句小字。 */
+  memberBlock: {
+    gap: 2,
   },
   matchRow: {
     flexDirection: 'row',

@@ -1,6 +1,6 @@
 import { ADVICE_KEY_LABELS, exclusionReasons, isExcluded } from './advice';
-import { OIL_LIMIT_ML, looksRawByName, repairLabels } from './diet';
-import { historyLine, type DishHistoryEntry } from './history';
+import { OIL_LIMIT_ML, isRiskyRaw, looksRawByName, repairLabels } from './diet';
+import { historyLine, latestMenuNames, type DishHistoryEntry } from './history';
 import {
   CATEGORY_LABELS,
   CATEGORY_ORDER,
@@ -10,7 +10,7 @@ import {
   PREFERENCE_LABELS,
 } from './labels';
 import { adviceKeysFor, householdPortions, isToddler, memberSummaryLabel } from './members';
-import { nutritionTarget } from './nutrition';
+import { foodGroupAmount, nutritionTarget } from './nutrition';
 import { missingIngredients, normalizeName } from './planner';
 import { stapleOf } from './staples';
 import type {
@@ -72,11 +72,12 @@ export function isAiRecipe(recipe: Recipe): boolean {
  */
 export const HARD_CONSTRAINTS: Record<AdviceKey, string> = {
   pregnancy:
-    '不得出现生食或半生（刺身、溏心蛋、生腌、生火腿、温泉蛋、未杀菌奶）、酒精，以及鲨鱼/旗鱼/剑鱼这类高汞鱼',
-  toddler: '不得重辣；不得生食；坚果必须碾碎或不出现；不出现整颗葡萄、整颗圣女果这类容易噎住的食材',
+    '不得出现生食或半生的**动物性**食物（刺身、溏心蛋、生腌、生火腿、温泉蛋、未杀菌奶）、酒精，以及鲨鱼/旗鱼/剑鱼这类高汞鱼。注意：洗过的水果、生食蔬菜沙拉不在此列，可以正常出现',
+  toddler:
+    '不得重辣；不得生食**动物性**食物（生肉、生鱼生海鲜、生腌、半熟蛋、未杀菌奶）——洗过的水果、生食蔬菜沙拉可以；坚果必须碾碎或不出现；不出现整颗葡萄、整颗圣女果这类容易噎住的食材',
   gout: '不得使用动物内脏（肝、腰花、毛肚）、海鲜（虾、蟹、贝、蛤、蚝、鱿鱼、鱼、鲍鱼、鱼子、海胆）、浓肉汤与久煮的骨汤',
   insulinResistance:
-    '不出现精制糖（白糖、蜂蜜、糖浆）与含糖饮料；主食必须低 GI（糙米、杂粮、燕麦、荞麦），不用白米饭、白面与精制面食（白面包、意面、乌冬、拉面）',
+    '不出现精制糖（白糖、蜂蜜、糖浆）与含糖饮料；主食优先低 GI（糙米、杂粮、燕麦、荞麦），不用白米饭、白面与精制面食（白面包、意面、乌冬、拉面）；全天碳水控制在总热量的 45% 以内（本应用口径），用足蔬菜、豆制品和蛋白质把这部分能量补上，不要用油补',
   hypertension: '不用腌制品、豆瓣酱、腐乳、咸菜、腊味、火腿、味噌、泡菜、培根；每道菜的盐不超过 2 克',
   hyperlipidemia: '不用肥肉、五花肉、带皮禽肉、动物油、黄油、奶酪、椰浆、香肠与加工肉',
   ckd: '限钠（与高血压同口径）；蛋白质不过量',
@@ -594,9 +595,9 @@ function buildSystem(profile: Profile): string {
     [
       '【三餐结构】',
       '- 早餐、午餐、晚餐各一「套」，共三套，slot 分别是 breakfast / lunch / dinner，各出现一次。',
-      '- 每套由 2–3 个组成部分（components）构成；每个组成部分都是一道**独立的菜**，有自己的食材与做法。',
+      '- 每套由 2–4 个组成部分（components）构成；每个组成部分都是一道**独立的菜**，有自己的食材与做法。',
       '- 早餐的结构：饮品/奶类 ＋ 蛋白质 ＋ 主食/果蔬（例如 温牛奶 ＋ 水煮蛋 ＋ 莓果燕麦碗）。',
-      '- 午餐、晚餐的结构：一荤 ＋ 一素 ＋ 主食/汤（例如 番茄炒蛋 ＋ 清炒西兰花 ＋ 米饭）。',
+      '- 午餐、晚餐的结构：一荤 ＋ 一素 ＋ 主食/汤（例如 番茄炒蛋 ＋ 清炒西兰花 ＋ 米饭）；要更丰富就再加一份汤或餐后水果，**最多 4 个**。',
       '- 同一套里的组成部分不要互相重复主料与做法 —— 不要两个都是炒蛋，也不要两个都是清炒青菜；一天里同理。',
       '- 主食只写一次：这一套里已经有主食类的菜（粥/面/饭/燕麦碗）时，把主食写进那道菜的 ingredients（category 写 staple），所有 staple 字段留 null；否则把「另配」的主食写在**主菜**的 staple 上（午餐晚餐通常要有一个），其余留 null。',
     ].join('\n'),
@@ -606,7 +607,7 @@ function buildSystem(profile: Profile): string {
     [
       '【份量口径】',
       '- ingredients 与 seasonings 的 amount、calories、protein、carbs、fat、fiber、staple.amount **全部是每人份**，不是全家总量；程序会自己按人数乘。',
-      '- 每个组成部分每人份 50–800 千卡；**一套（2–3 个组成部分）合计约 300–900 千卡** —— 那是一顿饭的量，不是三道主菜。',
+      '- 每个组成部分每人份 50–800 千卡；**一套（2–4 个组成部分）合计约 300–900 千卡** —— 那是一顿饭的量，不是三四道主菜。',
       '- minutes 5–90 分钟；一道菜 3–8 步。',
       '- 食材用中国家庭买菜时的名字（鲜虾、北豆腐、小油菜），因为忌口、升糖、钠、油都是从名字和 category 推出来的。',
     ].join('\n'),
@@ -621,7 +622,7 @@ function buildSystem(profile: Profile): string {
       '- oilLevel：low | medium | high；spice：none | mild | hot',
       '- carbs（0–300）、fat（0–150）、fiber（0–60）：每人份克数，估算值即可。',
       '- 调味料的单位必须固定：酱油类（生抽/老抽/蚝油）用「勺」，盐用「g」，食用油用「ml」。',
-      '- raw：生食或半生必须写 true。',
+      '- raw：**动物性**的生食或半生（生肉、生鱼生海鲜、生腌、半熟蛋、未杀菌奶）写 true；洗过的水果、生食蔬菜沙拉写 false —— 它们生吃是本来的吃法，不算孕期/幼儿的生食禁忌。',
     ].join('\n'),
   );
 
@@ -650,6 +651,8 @@ function buildSystem(profile: Profile): string {
     [
       '【菜系与可操作性】',
       '- 菜系不限：中餐、西餐、日料、东南亚都可以，也可以混着来。标准只有两条：**好吃**、**普通家庭厨房能做**。',
+      '- **每餐的菜系要穿插**，别一份菜单从头到尾都是同一路：同一份菜单里至少出现两种菜系，相邻两餐尽量换一种（例如 西式燕麦碗 ＋ 中式番茄炒蛋 ＋ 日式味噌汤配煎鱼）。',
+      '- 同一餐的组成部分之间也别都是同一路做法（三个都是清炒、都是炖菜）。',
       '- 以 30 分钟内能做完为主；炖汤、腌制可以更长，但 minutes 要写清。',
       '- 不用稀有食材与特殊器具，菜市场或超市买得到。',
     ].join('\n'),
@@ -686,7 +689,9 @@ function buildSystem(profile: Profile): string {
     [
       '【不要重复】',
       '- 同一份菜单里**不许出现两道同名或高度雷同的菜**：不能两餐都是炒蛋，也不能两道都是清炒青菜。',
-      '- 最近几天做过的菜会写在下面，今天换别的。',
+      '- 最近 3 天做过的菜会写在下面，今天**一道都不要重复**（食库与禁忌实在躲不开时，也先换掉别的）。',
+      '- 下面还会单独列出**上一次生成的菜单**的菜名：这一次与它重复的菜**最多一道**，也就是说新菜单里至少要有两道是上一次没有的。',
+      '- 同一份菜单里，三餐的主料与做法要互相错开：不要三顿都以炒青菜打底，也不要连着两餐都用鸡胸。',
     ].join('\n'),
   );
 
@@ -717,12 +722,43 @@ function buildUser(
   );
 
   // 目标由 `nutritionTarget` 现算，不另设参数：界面上的目标卡与这里送出去的数字因此是同一个函数、
-  // 同一组系数，不可能对不上。
+  // 同一组系数，不可能对不上。每位成员单独列，是因为「全家 4000 千卡」这种合计对模型没有指导意义
+  // ——它得知道**谁**不能吃多、谁需要加量，才能安排一桌菜。
   const target = nutritionTarget(profile);
-  lines.push('');
-  lines.push(
-    `全天营养目标（全家，参考）：热量约 ${target.kcal} 千卡、蛋白质约 ${target.protein}g、碳水约 ${target.carbs}g、脂肪约 ${target.fat}g、膳食纤维约 ${target.fiber}g。`,
+  const memberTargets = target.members.map(
+    (member) =>
+      `- ${member.name}（${member.summary}）：热量约 ${member.kcal} 千卡、蛋白质约 ${member.protein}g、` +
+      `碳水约 ${member.carbs}g、脂肪约 ${member.fat}g、膳食纤维约 ${member.fiber}g`,
   );
+  lines.push('');
+  lines.push('每位成员一天的目标（参考值，来自《中国居民膳食指南（2022）》与 2023 版 DRIs）：');
+  lines.push(...memberTargets);
+  lines.push(
+    `全家合计：热量约 ${target.kcal} 千卡、蛋白质约 ${target.protein}g、碳水约 ${target.carbs}g、` +
+      `脂肪约 ${target.fat}g、膳食纤维约 ${target.fiber}g。`,
+  );
+
+  // 食物类别单列一段：宏量数字管不了「今天有没有吃到 300g 蔬菜」，而宝塔管的就是这件事。
+  // 这段是**全家一天**的量（合桌的菜没法按人头分摊），所以说明白口径，免得模型把它当每人份。
+  if (target.foodGroups.length > 0) {
+    lines.push('');
+    lines.push(
+      // 出处跟着上面那几行走（`foodGroupsBasis`）：家里有小孩或长辈时，数字来自另外两张宝塔，
+      // 这里写死「平衡膳食宝塔」就会把他们的量说成成人宝塔的。
+      `全家一天的食物类别目标（依据${target.foodGroupsBasis}，全家一天的量、不是每人份）：`,
+    );
+    lines.push(
+      ...target.foodGroups.map(
+        (group) =>
+          `- ${group.label} ${foodGroupAmount(group)}${group.note ? `（${group.note}）` : ''}`,
+      ),
+    );
+    lines.push(
+      '请让整份菜单的**食物类别结构**贴近这份目标：蔬菜和水果的量要够（这两样是最容易做少的），' +
+        '一天要有奶类，主食里安排全谷物或杂豆，盐、油、添加糖不超上限。营养素与食物类别都是参考区间，' +
+        '不必精确到克，但不要让整天的菜全是主食和肉。',
+    );
+  }
 
   // 每样食材带上它的**类别**：模型要判断「油莎豆（干货坚果）平时怎么吃」就得先知道它是干货坚果，
   // 而不是从名字去猜。类别文字由 `CATEGORY_LABELS` 出，与界面上显示的是同一份。
@@ -740,11 +776,21 @@ function buildUser(
     lines.push(`${history}。今天不要再出现这些菜。`);
   }
 
+  // 「上一次生成的菜单」单独列一次：历史那行是去重后的汇总，模型读成一张「通用忌做清单」；把最新
+  // 那一条单独点出来并给一个**可数**的重复上限（≤1 道），才逼得出「换掉大半」而不是「微调一下」。
+  const previous = latestMenuNames(options.history ?? []);
+  if (previous.length > 0) {
+    lines.push('');
+    lines.push(
+      `上一次生成的菜单是：${previous.join('、')}。这一次与它重复的菜**不超过一道** —— 至少要有两道是上面没出现过的，能全换新最好。`,
+    );
+  }
+
   lines.push('');
   // user 段是模型最后读到的东西，把几条最容易走偏的原则在这里再说一遍 —— 这里写着「不必用完」，
   // 上面那段食材清单就不会被读成「今天必须把这些做完」。
   lines.push(
-    '请按上面的 schema 生成今天的三餐：每餐 2–3 个组成部分，菜名必须是真实存在的菜（菜系不限），食库里的食材优先考虑、不必用完（每样先想它平时怎么吃，拿不准就别用），缺的写进 missing；真有话要说才写 notes，没有就写 []。',
+    '请按上面的 schema 生成今天的三餐：每餐 2–4 个组成部分，菜名必须是真实存在的菜（菜系尽量穿插、别都挤在同一路），食库里的食材优先考虑、不必用完（每样先想它平时怎么吃，拿不准就别用），缺的写进 missing；真有话要说才写 notes，没有就写 []。',
   );
 
   if (options.correction) {
@@ -978,9 +1024,9 @@ interface RawMeal {
  */
 export const TABOO_CHECK_OK = '无冲突';
 
-/** 一餐的组成部分数。数字来自需求「每餐 2–3 个组成部分」，不是调出来的。 */
+/** 一餐的组成部分数。数字来自需求「每餐 2–4 个组成部分」，不是调出来的。 */
 const MEAL_COMPONENTS_MIN = 2;
-export const MEAL_COMPONENTS_MAX = 3;
+export const MEAL_COMPONENTS_MAX = 4;
 
 /** 顶层 notes 的形状上限：条数与每条字数。**界面上一张小卡读得完的量**，不是调出来的阈值。 */
 export const NOTES_MAX = 2;
@@ -1071,7 +1117,7 @@ function readDish(raw: Record<string, unknown>, path: string): RawDish {
   return dish;
 }
 
-/** 一套 2–3 个组成部分。数量不在区间里就整份丢弃 —— 补一个「组成部分」等于自己编一道菜。 */
+/** 一套 2–4 个组成部分。数量不在区间里就整份丢弃 —— 补一个「组成部分」等于自己编一道菜。 */
 function readComponents(value: unknown, path: string): RawDish[] {
   if (!Array.isArray(value)) return shapeFail(`${path} 不是数组`);
   if (value.length < MEAL_COMPONENTS_MIN || value.length > MEAL_COMPONENTS_MAX) {
@@ -1145,11 +1191,12 @@ function aiRecipeId(date: string, slot: MealSlot, index: number): string {
  *   按名字核对一遍。见 `diet.repairLabels`。改正后的菜谱**就是入库的那一份**，所以详情页的饮食维度
  *   显示的也是核对过的等级。
  * - 生食：模型自称 `raw`，但名字里写着刺身/溏心的，一律按生食处理，写进 `exclusions` ——
- *   于是孕期与幼儿的硬排除（`advice.exclusionReason`）在本地那套规则里自动生效。
+ *   于是孕期与幼儿的硬排除（`advice.exclusionReason`）在本地那套规则里自动生效。**只有动物性生食
+ *   才写**（`isRiskyRaw`）：洗过的水果、生食蔬菜沙拉不算禁忌。
  * - 油：写着一大勺油却说少油的，按 `isHighOil` 的同一个阈值改判 —— 否则详情页写着「少油」，而
  *   「清淡」偏好又同时在报冲突，两处自相矛盾。
  *
- * 主食**不在这里**补（旧版是逐条 meal 补的）：一餐有 2–3 个组成部分，逐条补会给一顿饭补出三碗白米饭。
+ * 主食**不在这里**补（旧版是逐条 meal 补的）：一餐有 2–4 个组成部分，逐条补会给一顿饭补出三四碗白米饭。
  * 补主食上移到 `ensureMealStaples`，一餐至多一次。
  */
 function toRecipe(
@@ -1186,26 +1233,32 @@ function toRecipe(
 
   if (dish.staple) recipe.staple = dish.staple;
 
-  if (dish.raw || looksRawByName(recipe)) {
-    recipe.exclusions = { pregnancy: '生食', toddler: '生食' };
-    if (!dish.raw) warnings.push(`${dish.name} 的名字看着像生食，已按生食处理`);
-  }
-
   const oil = dish.seasonings
     .filter((item) => !item.optional && /油/.test(item.name))
     .reduce((sum, item) => sum + (item.unit === 'ml' ? item.amount : 0), 0);
   if (oil >= OIL_LIMIT_ML) recipe.oilLevel = 'high';
 
+  // 类别先按名字核对一遍（模型能把生鱼片标成 `veg`），生食判定与最终入库的那一份用同一套改正，
+  // 否则漏标的类别能骗过下面的动物性判断。
+  const labeled = repairLabels(recipe);
+
+  // 生食禁忌**只对动物性生食**生效（见 `diet.isRiskyRaw`）：洗过的水果、生食蔬菜沙拉生吃是本来的
+  // 吃法，按生食排除会让有孕期的家庭一份果盘都生成不出来（用户的案例：柚子、桃子被误杀）。
+  if ((dish.raw || looksRawByName(labeled)) && isRiskyRaw(labeled)) {
+    labeled.exclusions = { pregnancy: '生食', toddler: '生食' };
+    if (!dish.raw) warnings.push(`${dish.name} 的名字看着像生食，已按生食处理`);
+  }
+
   // 缺货清单：本地是唯一事实来源，AI 那份只作对照。比**条数**而不是名字 —— 名字有别名（西红柿/番茄），
   // 逐名对比会把「本地认出来了」误报成不一致。
-  const missingLocally = missingIngredients(recipe, pantry).length;
+  const missingLocally = missingIngredients(labeled, pantry).length;
   if (dish.missing.length !== missingLocally) {
     warnings.push(
       `${dish.name} 自报缺 ${dish.missing.length} 样，本地按食库算是 ${missingLocally} 样（以本地为准）`,
     );
   }
 
-  return repairLabels(recipe);
+  return labeled;
 }
 
 /**
@@ -1361,7 +1414,7 @@ export function parseMenu(
  * 这正是需求 9，下游（今日页、详情页、购物清单）分不出这份菜单是谁排的。
  *
  * 每个 slot 收到的是**该餐所有组成部分**的 id，顺序就是模型给的顺序（也是展示顺序）。任何一餐一个
- * 都没有就返回 `null`，让调用方回退（正常走不到：`normalizeMenu` 已经保证每餐 2–3 个）。
+ * 都没有就返回 `null`，让调用方回退（正常走不到：`normalizeMenu` 已经保证每餐 2–4 个）。
  */
 export function menuPlan(
   recipes: Recipe[],

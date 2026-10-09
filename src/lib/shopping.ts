@@ -62,7 +62,7 @@ export function buildShoppingList(
   const drafts = new Map<string, Draft>();
 
   for (const slot of MEAL_SLOTS) {
-    // 一餐可能有 2–3 个组成部分（AI 路径），每个都要进清单：缺口按名字合并，份数口径不变。
+    // 一餐可能有 2–4 个组成部分（AI 路径），每个都要进清单：缺口按名字合并，份数口径不变。
     for (const id of plan.meals[slot]) {
       const recipe = getRecipe(id);
       // Mirrors the 今日 tab: an id the current recipe set no longer knows is simply skipped.

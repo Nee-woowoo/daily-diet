@@ -98,6 +98,24 @@ export function recordDishes(
 }
 
 /**
+ * 最近一次生成的那份菜单的菜名（历史里最新的那一条），给 prompt 的「上一次生成的菜单」用。
+ *
+ * `recordDishes` 每次发布菜单都会重写当天那条，所以历史里最新的那一条正是「上一次生成的那份」——
+ * 不必另存一份，重启后也还在。没有历史时返回空数组（调用方据此不插入这一段）。
+ */
+export function latestMenuNames(entries: DishHistoryEntry[]): string[] {
+  const normalized = normalize(entries);
+  const last = normalized[normalized.length - 1];
+  if (!last) return [];
+  const names: string[] = [];
+  for (const name of last.names) {
+    const cleaned = cleanName(name);
+    if (cleaned.length > 0 && !names.includes(cleaned)) names.push(cleaned);
+  }
+  return names;
+}
+
+/**
  * 发给模型的那一行；没有可用的历史时返回空串（调用方据此不插入这一段）。
  *
  * 名字去重（同一道菜在 3 天里做过两次只报一次），顺序按天、天内的顺序不变。

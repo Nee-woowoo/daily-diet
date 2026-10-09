@@ -46,7 +46,9 @@ const NOTES_TOKENS = NOTES_MAX * TOKENS_PER_NOTE;
 
 /**
  * 输出上限。**按最坏情况推导**，不是凭感觉填一个数：一餐最多 `MEAL_COMPONENTS_MAX` 个组成部分、
- * 一共 `MEAL_SLOTS` 餐，所以上限 = 3 × 3 × 500 + 信封 ≈ 5000。
+ * 一共 `MEAL_SLOTS` 餐，所以上限 = `MEAL_SLOTS.length` × `MEAL_COMPONENTS_MAX` × 500 + 信封 + notes
+ * （3 × 4 × 500 + 512 + 96 ≈ 6608）。上限跟着 `MEAL_COMPONENTS_MAX` 走：它从 3 放宽到 4 之后这里
+ * 自动变大，不必手改。
  *
  * 上一版这里是 4096，注释写着「一顿饭的 json」—— 那是「一餐一道菜」时代的余量，多道菜之后就不够
  * 推导了。超了会以 `truncated` 失败并让用户重试（不崩、不脏写），但白跑一次请求；所以宁可给宽。
@@ -63,10 +65,17 @@ const MAX_TOKENS =
 export const REQUEST_TIMEOUT_MS = 60_000;
 
 /**
- * 显式写 1，而不是省略：省略时默认值是多少我在这里验证不了，而 0 会让「重新生成」拿到一份和上一次
- * 一模一样的菜单。1 在任何合理的取值区间里都合法。
+ * 显式写出来，而不是省略：省略时默认值是多少我在这里验证不了，而 0 会让「重新生成」拿到一份和上一次
+ * 一模一样的菜单。
+ *
+ * 取 1.2 而不是 1：需求要的是「连续生成几次别高度雷同」，而 1 仍然是偏保守的采样温度 —— 在「同一个人、
+ * 同一份食库、同一批禁忌」的条件下，模型很容易收敛回上一次那几道菜。1.2 提高了换菜的概率。
+ *
+ * 代价是 json 形状出错的概率也跟着涨（`schema` 类失败）。兜底有两层：本地 `normalizeMenu`/`validateMenu`
+ * 会当场判错，而 `storage.generateWithAi` 在一次点击里会带着失败原因再问一次。真机压力测试若发现
+ * `schema` 明显变多，先降到 1.1 —— 那是这一层的旋钮，别去动 prompt。
  */
-const TEMPERATURE = 1;
+const TEMPERATURE = 1.2;
 
 /**
  * `response_format: { type: 'json_object' }` 我**没有**发出去。

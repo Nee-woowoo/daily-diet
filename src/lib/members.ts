@@ -7,6 +7,7 @@ import type {
   MetabolicTag,
   Preference,
   Profile,
+  Sex,
   SpecialTag,
 } from './types';
 
@@ -31,6 +32,32 @@ export const SPECIAL_TAG_HINTS: Record<SpecialTag, string> = {
   growingChild: '正在长身体，优先蛋白质和钙',
   seniorLight: '口味清淡、少油少盐',
 };
+
+/** 性别的规范顺序（表单里的排列顺序），与 `labels.ts` 那些表同一个思路：只写一处。 */
+export const SEXES: Sex[] = ['male', 'female'];
+
+/**
+ * 性别的中文名。**不**并进 `MEMBER_TAG_LABELS` —— `sex` 不是 `MemberTag`，它不参与任何标签规则，
+ * 只参与参考摄入量取值（男 18–29 岁轻身体活动 2150 千卡 vs 女 1700）。
+ */
+export const SEX_LABELS: Record<Sex, string> = { male: '男', female: '女' };
+
+/**
+ * 孕周的可填范围。40 周之后不叫孕期，1 周之前不存在 —— 超出范围的值当「没填」丢掉，而不是夹到边界：
+ * 把 45 夹成 40 等于替用户编了一个「孕晚期」，而丢掉只会退回孕中期兜底，那是界面上写明的口径。
+ */
+export const PREGNANCY_WEEK_MIN = 1;
+export const PREGNANCY_WEEK_MAX = 40;
+
+/** 勾了「孕期」。`pregnancyWeek` 只在它为真时有意义（见 `pregnancyWeekOf`）。 */
+export function isPregnant(member: Member): boolean {
+  return member.special.includes('pregnancy');
+}
+
+/** 孕周；没勾孕期或没填时是 `undefined`，调用方按孕中期兜底并写明。 */
+export function pregnancyWeekOf(member: Member): number | undefined {
+  return isPregnant(member) ? member.pregnancyWeek : undefined;
+}
 
 /**
  * 慢性代谢疾病，可多选。勾上就按 `diet` 的四维分级做硬性排除，与孕期同一套机制。
@@ -78,11 +105,22 @@ export const MEMBER_TAG_LABELS: Record<MemberTag, string> = {
   ...METABOLIC_TAG_LABELS,
 };
 
-/** 这位成员身上挂着的标签的名字，按 `STATUS_TAGS` 的规范顺序。 */
+/**
+ * 这位成员身上挂着的标签的名字，按 `STATUS_TAGS` 的规范顺序。
+ *
+ * 孕周并进「孕期」这一个标签里（「孕期（20 周）」），而不是另起一段 —— 摘要里 2–4 个标签已经很长，
+ * 单开一节会让「孕 20 周」看起来像第四个标签。填了才有括号。
+ */
 function tagLabelsOf(member: Member): string[] {
-  return STATUS_TAGS.filter((tag) => member.special.includes(tag)).map(
-    (tag) => MEMBER_TAG_LABELS[tag],
-  );
+  return STATUS_TAGS.filter((tag) => member.special.includes(tag)).map((tag) => {
+    if (tag === 'pregnancy') {
+      const week = pregnancyWeekOf(member);
+      return week === undefined
+        ? SPECIAL_TAG_LABELS.pregnancy
+        : `${SPECIAL_TAG_LABELS.pregnancy}（${week} 周）`;
+    }
+    return MEMBER_TAG_LABELS[tag];
+  });
 }
 
 /**
@@ -255,6 +293,22 @@ function readAge(value: unknown): number {
   return Math.min(120, Math.max(0, Math.trunc(value)));
 }
 
+/**
+ * 性别不填就**不填**（`undefined`），没有「默认值」可言 —— 见 `Sex`。旧数据里没有这个字段，
+ * 和 `medical` 一样是可选新增，读出来就是 `undefined`。
+ */
+function readSex(value: unknown): Sex | undefined {
+  return SEXES.includes(value as Sex) ? (value as Sex) : undefined;
+}
+
+/** 超出 1–40 或非整数一律丢掉（当没填），理由见 `PREGNANCY_WEEK_MIN`。 */
+function readPregnancyWeek(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const week = Math.trunc(value);
+  if (week < PREGNANCY_WEEK_MIN || week > PREGNANCY_WEEK_MAX) return undefined;
+  return week;
+}
+
 function readSpecial(value: unknown): MemberTag[] {
   if (!Array.isArray(value)) return [];
   // Normalizing against `STATUS_TAGS` (not just the special states) is what lets disease tags survive
@@ -288,12 +342,16 @@ function readMember(value: unknown): Member | null {
   const name = typeof value.name === 'string' ? value.name.trim() : '';
   // A member without a 称呼 is unusable: the UI has nothing to show and the 兼顾说明 has no subject.
   if (name.length === 0) return null;
+  const special = readSpecial(value.special);
   return {
     id: typeof value.id === 'string' && value.id.length > 0 ? value.id : createMemberId(),
     name,
     age: readAge(value.age),
     goal: readGoal(value.goal),
-    special: readSpecial(value.special),
+    special,
+    sex: readSex(value.sex),
+    // 勾了孕期才留孕周：没勾的一律丢掉，免得取消勾选后那个数字还躺在存储里，下次勾回来又冒出来。
+    pregnancyWeek: special.includes('pregnancy') ? readPregnancyWeek(value.pregnancyWeek) : undefined,
     medical: readMedical(value.medical),
   };
 }

@@ -38,6 +38,13 @@ export type MealRole = 'drink' | 'protein' | 'staple' | 'veg' | 'soup' | 'fruit'
 /** 体重方向就是 `Goal` —— 一位成员只能有一个，所以直接复用，标签和配色都现成。 */
 export type BodyTag = Goal;
 
+/**
+ * 生理性别。膳食参考摄入量（DRIs）的能量、蛋白质、铁等值**按性别分列**，所以成员身上必须记得住
+ * 这一个。不填时为 `undefined`，由 `guidelines` 按男女两档的中值处理并写明口径 —— 不默默当成
+ * 某一性别。
+ */
+export type Sex = 'male' | 'female';
+
 /** 成员的特殊状态，可多选。这些是**偏好**类的照顾（菜单按它加权），不是禁忌。 */
 export type SpecialTag = 'pregnancy' | 'growingChild' | 'seniorLight';
 
@@ -72,6 +79,16 @@ export interface Member {
   goal: Goal;
   /** 特殊状态与慢性代谢疾病，多选。字段名保留 `special` 是为了不改存储键、不做数据迁移。 */
   special: MemberTag[];
+  /**
+   * 生理性别。参考摄入量按性别分列（男 18–29 岁轻身体活动 2150 千卡 vs 女 1700），不填就只能按
+   * 两档中值估，卡片上会写明「性别未填」。
+   */
+  sex?: Sex;
+  /**
+   * 孕周 1–40。只在特殊状态里勾了「孕期」时填。`undefined` = 没填，由 `nutrition` 按**孕中期**兜底
+   * 并在界面上写明（与 `age: 0` 同一个思路：不编造一个精确值塞进存储）。
+   */
+  pregnancyWeek?: number;
   /**
    * 体检指标异常，自由文本（如「尿酸偏高、轻度脂肪肝」）。**只发给 AI 当上下文**，不参与本地硬排除 —
    * 自由文本没法可靠地映射成 `MetabolicTag`，猜错了要么漏排要么多排，所以它只影响 prompt。
@@ -197,7 +214,7 @@ export interface DayPlan {
   /** Local calendar day as `YYYY-MM-DD`. */
   date: string;
   /**
-   * 每个 slot 是这一餐的**若干个组成部分**的菜谱 id（一荤 + 一素 + 主食/汤，AI 给 2–3 个）。
+   * 每个 slot 是这一餐的**若干个组成部分**的菜谱 id（一荤 + 一素 + 主食/汤，AI 给 2–4 个）。
    *
    * 数组形状是统一的，本地路径只放一个（见 `planner.generatePlan`）：两条路径共用同一套消费方
    * （今日页、购物清单、主食计划），多一个「有时是字符串有时是数组」的分支就多一处永远测不到的路径。

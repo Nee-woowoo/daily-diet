@@ -323,7 +323,7 @@ export function generatePlan(
   pantry: PantryItem[],
   previous?: DayPlan | null,
 ): DayPlan {
-  // `meals` 每槽是数组（AI 一餐 2–3 个组成部分），所以要先摊平才知道上一份菜单用过哪些 id。
+  // `meals` 每槽是数组（AI 一餐 2–4 个组成部分），所以要先摊平才知道上一份菜单用过哪些 id。
   const avoid = new Set<string>(previous ? Object.values(previous.meals).flat() : []);
   const taken = new Set<string>();
 

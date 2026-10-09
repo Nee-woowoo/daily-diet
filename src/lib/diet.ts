@@ -67,6 +67,35 @@ export function looksRawByName(recipe: Recipe): boolean {
   );
 }
 
+/**
+ * 生食里真正对**孕期与幼儿**有风险的那一类：动物性生食 —— 生肉、生鱼生海鲜、生腌、半熟蛋、
+ * 未经巴氏消毒的乳制品。
+ *
+ * 刻意**不含**一个光秃秃的「生食」二字：洗过的水果、生食蔬菜沙拉生吃本来就是它们的正常吃法。把它们
+ * 按生食排除，会让有孕期的家庭一份果盘都生成不出来（用户的案例：柚子、桃子被误杀，AI 连着失败）。
+ */
+const RISKY_RAW_BY_NAME =
+  /刺身|生腌|鱼生|生鱼|生蚝|生肉|生牛肉|生鸡蛋|生蛋|溏心|半熟|流心|温泉蛋|鞑靼|生火腿|醉虾|醉蟹|生奶|生乳|未杀菌|未消毒/;
+
+/**
+ * 这道**生食/半生**的菜是不是动物性的（＝对孕期与幼儿构成真正的生食风险）。
+ *
+ * 三层判据，任何一层命中就算，故意偏严（漏判一道生鱼片端上孕妇的桌，比误杀一份果盘严重）：
+ * - `category === 'meat'` 的食材（肉、鱼、虾、贝）—— 模型把生鱼片标成 `veg` 时下面那层兜住；
+ * - `category === 'egg'` 且名字带「蛋」（这个类别里蛋与奶是同一类，牛奶不该跟着算）；
+ * - 名字里明写刺身/生腌/溏心这类。
+ *
+ * 只能在菜谱已经过 `repairLabels`（类别按名字核对过）之后调用，否则模型乱标的类别会骗过它。
+ * 三层全不命中（水果、蔬菜、普通乳制品）→ 不是风险，`ai.toRecipe` 因此不写 `exclusions`。
+ */
+export function isRiskyRaw(recipe: Recipe): boolean {
+  if (recipe.ingredients.some((item) => item.category === 'meat')) return true;
+  if (recipe.ingredients.some((item) => item.category === 'egg' && /蛋/.test(item.name))) return true;
+  return [recipe.name, ...recipe.ingredients.map((item) => item.name)].some((name) =>
+    RISKY_RAW_BY_NAME.test(name),
+  );
+}
+
 /** The recipe-side spellings, exactly as `recipes.ts` writes them — 「虾」/「豆腐」 would never match. */
 const CALCIUM_RICH_NAMES = ['鲜虾', '嫩豆腐', '牛奶', '西兰花', '干香菇'];
 

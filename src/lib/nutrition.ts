@@ -1,17 +1,55 @@
 import { MEAL_SLOTS } from './labels';
-import { DEFAULT_MEMBER, adviceKeysFor, bodyTagOf, householdPortions, portionFactor } from './members';
+import {
+  CLINICAL_ADJUST,
+  DEFAULT_PREGNANCY_STAGE,
+  FAT_ENERGY_SHARE,
+  FIBER_G,
+  GOAL_ADJUST,
+  IR_CARB_SHARE_CAP,
+  KCAL_PER_G,
+  PREGNANCY,
+  PREGNANCY_NUTRIENTS,
+  PREGNANCY_STAGE_LABELS,
+  SOURCES,
+  energyBandFor,
+  pagodaFor,
+  pregnancyStage,
+  proteinBandFor,
+  sourceLabel,
+  todoSuffix,
+} from './guidelines';
+import type { FoodGroupKey, PregnancyStage } from './guidelines';
+import {
+  DEFAULT_MEMBER,
+  bodyTagOf,
+  householdPortions,
+  isPregnant,
+  memberSummaryLabel,
+  pregnancyWeekOf,
+} from './members';
 import { getRecipe } from './recipes';
 import { buildStaplePlan } from './staples';
-import type { AdviceKey, DayPlan, Goal, MealSlot, Member, Profile, Recipe } from './types';
+import type {
+  DayPlan,
+  MealSlot,
+  Member,
+  MetabolicTag,
+  Profile,
+  Recipe,
+  Sex,
+} from './types';
 
 /**
- * 全天营养目标的估算，以及「今天这份菜单提供了多少」。
+ * 全天营养目标，以及「今天这份菜单提供了多少」。
  *
- * 纯模块：没有 React、没有存储。它也是**唯一**一处把「年龄 / 体重方向 / 特殊状态」翻译成数字的地方 ——
- * 今日页顶部的目标卡、发给模型的 prompt、harness 的断言都从这里取值，三处不可能各算一套。
+ * 纯模块：没有 React、没有存储。它也是**唯一**一处把「年龄 / 性别 / 体重方向 / 特殊状态」翻译成数字
+ * 的地方 —— 今日页顶部的目标卡、发给模型的 prompt、harness 的断言都从这里取值，三处不可能各算一套。
  *
- * 一切都是估算：本 app 没有身高、体重、活动量，只有年龄档与体重方向。所以界面上要写「按年龄与体重
- * 方向估算，仅供参考」，不写成医嘱式的「应该吃多少」。
+ * 数字本身不在这里，在 `guidelines`：那里每个数都挂着出处（哪一版指南、哪一张 DRIs 表），核实不到的
+ * 挂着 `todo`。本文件只负责**查表 + 相加 + 拼依据**，一个凭空的数字都不许写。
+ *
+ * 口径仍不是医嘱：本 app 没有身高、体重，活动量固定按轻身体活动。所以卡片上写「依据《中国居民膳食
+ * 指南（2022）》，仅供参考」，不写成「你应该吃多少」。
  */
 
 /** 五项营养：`kcal` 是能量，其余是克数。 */
@@ -23,116 +61,271 @@ export interface Macros {
   fiber: number;
 }
 
-/** 成人（成人份、均衡、无特殊状态）的一日参考能量。轻身体活动水平成人的估值，不是处方。 */
-const BASE_ADULT_KCAL = 2000;
-
-/** 体重方向对总能量的缩放：减脂略降、增肌略升。方向性的估值。 */
-const GOAL_KCAL_FACTOR: Record<Goal, number> = {
-  fatLoss: 0.85,
-  balanced: 1,
-  muscleGain: 1.15,
-};
-
-/** 孕期能量略增。指南给的是每日 +300 千卡量级，折算成 15%。 */
-const PREGNANCY_KCAL_FACTOR = 1.15;
-
-interface Shares {
-  protein: number;
-  carbs: number;
-  fat: number;
+/** 一位成员的全天目标，外加**每一项数字的依据** —— 卡片直接把这几串拼上去，不再二次加工。 */
+export interface MemberTarget extends Macros {
+  name: string;
+  /** 「38 岁 · 女 · 孕期（20 周）」，卡片那一行的标题。 */
+  summary: string;
+  /** 热量那行的依据，如「依据 DRIs 2023 能量 · 减脂 −400 千卡」。 */
+  kcalBasis: string;
+  proteinBasis: string;
+  /** 碳水有额外口径时那句话（目前只有胰岛素抵抗的上限）；没有就是 `''`。 */
+  carbBasis: string;
+  /** 需要单独说一句的：性别没填、孕周没填、孕期重点、慢性肾病限蛋白…… */
+  notes: string[];
 }
 
 /**
- * 三大产能营养素的供能比基准，取自宏量营养素可接受范围（蛋白 10–15%、碳水 50–65%、脂肪 20–30%）
- * 的中段。
+ * 全家一天的食物类别目标，按宝塔层合并（每位成员的宝塔值相加）。
  *
- * 三者**加起来是 0.98 而不是 1**，这是有意的：份额只是相对权重，落到能量上之前会按比例归一化
- * （见 `sharesFor`），所以这里填区间的中值就行，不必手工凑成整数百分比。
+ * `max === null` 有两种意思，渲染时必须分开处理：**不超过型**（盐、添加糖，`min === 0`，读作
+ * 「≤X」）与**上限没核实**（某位成员的宝塔在这一层没有具体克数，此时 `todo` 非空，读作「≥Y」）。
  */
-const BASE_SHARES: Shares = { protein: 0.15, carbs: 0.55, fat: 0.28 };
-
-/**
- * 需要加码 / 限制的人把份额往区间的哪一端挪。表里没有的键 = 维持基准。
- *
- * 痛风 / 高血压 / 幼儿 / 长辈清淡 / 均衡 **不在**表里，也没打算加：它们管的是「选什么菜」，不是
- * 「吃多少」。这一条写在计划里是有意的，别当成漏了。
- */
-const SHARE_ADJUST: Partial<Record<AdviceKey, Partial<Shares>>> = {
-  muscleGain: { protein: 0.2 },
-  growingChild: { protein: 0.18 },
-  pregnancy: { protein: 0.18 },
-  ckd: { protein: 0.12 },
-  fatLoss: { carbs: 0.5 },
-  insulinResistance: { carbs: 0.5 },
-  hyperlipidemia: { fat: 0.22 },
-};
-
-/** 每 1000 千卡 14 克膳食纤维：通行的纤维推荐口径，随能量派生，不独立编一个数。 */
-const FIBER_PER_1000_KCAL = 14;
-
-/** Atwater 系数，物理常数。 */
-const KCAL_PER_G = { protein: 4, carbs: 4, fat: 9 };
-
-/**
- * 这位成员的供能比，已归一化到 1。
- *
- * 归一化是必需的：份额表经过 `SHARE_ADJUST` 调整后不一定加起来是 1（如减脂的 0.15 + 0.5 + 0.28），
- * 不归一化的话「碳水 × 4 + 蛋白质 × 4 + 脂肪 × 9」就不等于热量目标，页面上两个数字互相打架。
- */
-function sharesFor(member: Member): Shares {
-  const shares: Shares = { ...BASE_SHARES };
-  for (const key of adviceKeysFor(member)) Object.assign(shares, SHARE_ADJUST[key]);
-  const total = shares.protein + shares.carbs + shares.fat;
-  return {
-    protein: shares.protein / total,
-    carbs: shares.carbs / total,
-    fat: shares.fat / total,
-  };
-}
-
-/** 一位成员的全天目标。逐项取整，这样界面上的「逐位相加」与全家合计永远对得上。 */
-function memberTarget(member: Member): Macros {
-  const kcal =
-    BASE_ADULT_KCAL *
-    portionFactor(member) *
-    GOAL_KCAL_FACTOR[bodyTagOf(member)] *
-    (member.special.includes('pregnancy') ? PREGNANCY_KCAL_FACTOR : 1);
-  const shares = sharesFor(member);
-  return {
-    kcal: Math.round(kcal),
-    protein: Math.round((kcal * shares.protein) / KCAL_PER_G.protein),
-    carbs: Math.round((kcal * shares.carbs) / KCAL_PER_G.carbs),
-    fat: Math.round((kcal * shares.fat) / KCAL_PER_G.fat),
-    fiber: Math.round((kcal / 1000) * FIBER_PER_1000_KCAL),
-  };
+export interface FoodGroupTarget {
+  key: FoodGroupKey;
+  label: string;
+  min: number;
+  max: number | null;
+  unit: 'g' | 'ml';
+  note?: string;
+  /** 宝塔出处；成员跨了不同宝塔时写「按各成员年龄段分别取宝塔」。 */
+  basis: string;
+  /** 有成员这一层的克数没核实时非空，卡片上显示成「（待核实）」。 */
+  todo?: string;
 }
 
 export interface NutritionTarget extends Macros {
-  /** 逐位成员各自那一份，供界面解释「这些数是怎么加出来的」，也供 prompt 报给模型。 */
-  members: { name: string; kcal: number; protein: number }[];
+  /** 逐位成员各自那一份，供界面逐行解释「这些数是怎么来的」，也供 prompt 报给模型。 */
+  members: MemberTarget[];
+  /**
+   * 全家一天的食物类别目标。**不是**每人份也不是「今天这份菜单」的实测值 —— 一张合桌的菜单没法按
+   * 人头分摊蔬菜，所以它只做目标（卡片展示 + prompt 里要求兼顾结构）。
+   */
+  foodGroups: FoodGroupTarget[];
+  /** 上面那几行合起来的出处，见 `foodGroupBasis`。 */
+  foodGroupsBasis: string;
+}
+
+/**
+ * 食物类别那几行的出处去重后合成一句：家里只有成年人时就是一个宝塔的名字，跨了年龄段
+ * （既有小孩又有长辈）才是「按各成员年龄段分别取宝塔（…）」。
+ *
+ * 放在库里、而不是界面和 prompt 各自拼一次，是因为这句话是对上面那些数字**出处**的断言 ——
+ * 送出去的目标和屏幕上显示的目标必须挂同一个出处，否则改了一处就会有一处「依据」和它对不上
+ * （prompt 那段原先写死「平衡膳食宝塔」，家里有长辈时就会把老年人宝塔的数字说成成人宝塔的）。
+ */
+export function foodGroupBasis(targets: FoodGroupTarget[]): string {
+  return [...new Set(targets.map((group) => group.basis))].join('；');
+}
+
+/**
+ * 食物类别那一行读出来的量：`300–500g` / `≤5g` / `≥200g` / `待核实`。
+ *
+ * 三种形状分开是因为 `max === null` 有两种意思（见 `FoodGroupTarget`）：`min === 0` 是「不超过」型，
+ * 写成 ≤ 是对的；`min > 0` 是「上限没核实」，写成 ≥ 才是诚实的说法（写「300g 以上」不等于官方说
+ * 300–500）。一个数都没有的那种（`min === 0 && max === null`，如长辈宝塔的谷类）就直说待核实。
+ *
+ * 「（待核实）」后缀在这里带出去 —— 卡片和 prompt 都从这一个函数取值，两处不可能一个带一个不带。
+ */
+export function foodGroupAmount(target: FoodGroupTarget): string {
+  const { min, max, unit } = target;
+  if (max === null) {
+    return min > 0 ? `≥${min}${unit}${todoSuffix(target.todo)}` : '待核实';
+  }
+  const amount = min === 0 ? `≤${max}${unit}` : min === max ? `${min}${unit}` : `${min}–${max}${unit}`;
+  return `${amount}${todoSuffix(target.todo)}`;
+}
+
+/**
+ * 性别没填时取男女两档的**中值**，并让调用方在依据里写明 —— 不默默当成某一性别（见 `Sex`）。
+ */
+function sexValue(
+  values: Record<Sex, number>,
+  member: Member,
+): { value: number; mid: boolean } {
+  if (member.sex) return { value: values[member.sex], mid: false };
+  return { value: Math.round((values.male + values.female) / 2), mid: true };
+}
+
+/** 依据串的统一拼法：`依据 <出处> · <口径> · <口径>`，空的那几段自动去掉。 */
+function basisOf(parts: string[]): string {
+  return parts.filter((part) => part.length > 0).join(' · ');
+}
+
+/**
+ * 一位成员的全天目标。
+ *
+ * 顺序是有讲究的：先查 DRIs 的 EER/RNI（分年龄、分性别），再叠加体重方向与孕期的**增量**，最后做
+ * 胰岛素抵抗的碳水上限。每一步都在 `basis`/`notes` 里留下痕迹，卡片上不会出现来路不明的数字。
+ */
+function memberTarget(member: Member): MemberTarget {
+  const notes: string[] = [];
+  const band = energyBandFor(member.age);
+  const proteinBand = proteinBandFor(member.age);
+  const energy = sexValue(band.values, member);
+  const protein = sexValue(proteinBand.values, member);
+  const goal = GOAL_ADJUST[bodyTagOf(member)];
+
+  if (member.age === 0) notes.push('年龄没填，按成人最低档（18–29 岁）算');
+  if (energy.mid) {
+    notes.push(`性别没填，按男女两档中值估（男 ${band.values.male} / 女 ${band.values.female} 千卡）`);
+  }
+
+  let kcal = energy.value + goal.kcal;
+  let proteinG = protein.value * goal.proteinFactor;
+
+  // 孕期：增量加在**同年龄同性别**的基础值上，不是另起一套总量。
+  let pregnancyKcalNote = '';
+  let pregnancyProteinNote = '';
+  if (isPregnant(member)) {
+    const week = pregnancyWeekOf(member);
+    const stage: PregnancyStage = week === undefined ? DEFAULT_PREGNANCY_STAGE : pregnancyStage(week);
+    const extra = PREGNANCY[stage];
+    kcal += extra.kcal;
+    proteinG += extra.protein;
+    const stageLabel = PREGNANCY_STAGE_LABELS[stage];
+    if (extra.kcal > 0) pregnancyKcalNote = `${stageLabel} +${extra.kcal} 千卡`;
+    if (extra.protein > 0) pregnancyProteinNote = `${stageLabel} +${extra.protein}g`;
+    if (week === undefined) notes.push(`孕周没填，按${stageLabel}算`);
+    // 这一句刻意**不**走 `sourceLabel`：`PREGNANCY` 的 todo 说的是「官方表只印总值、增量是相减所得」，
+    // 那是口径说明而不是「数字没核完」，写成「（待核实）」会让用户以为 +250 这个数有问题。
+    notes.push(
+      extra.kcal > 0 || extra.protein > 0
+        ? `${stageLabel}增量按 ${SOURCES[extra.source].short}（官方表只印各档总值，增量是与非孕女性相减所得）`
+        : `${stageLabel}不需要额外增加能量和蛋白质`,
+    );
+    notes.push(
+      `孕期重点：${PREGNANCY_NUTRIENTS.map((item) => `${item.label} ${item.amount}`).join('、')}`,
+    );
+  }
+
+  // 代谢疾病对数量的调整（整道菜的排除在 `diet` 里，两处不要互相抄）。
+  let fatShare = FAT_ENERGY_SHARE;
+  for (const tag of Object.keys(CLINICAL_ADJUST) as MetabolicTag[]) {
+    if (!member.special.includes(tag)) continue;
+    const adjust = CLINICAL_ADJUST[tag]!;
+    if (adjust.fatShare !== undefined) fatShare = adjust.fatShare;
+    if (adjust.proteinFactor !== 1) {
+      proteinG *= adjust.proteinFactor;
+      notes.push(`${adjust.note} —— 蛋白质已按 ${adjust.proteinFactor} 倍下调`);
+    } else {
+      notes.push(adjust.note);
+    }
+  }
+
+  const kcalTotal = Math.round(kcal);
+  // 脂肪先定（供能比），蛋白质用 DRIs 的绝对克数，碳水吃剩下的能量。
+  let fatG = Math.round((kcalTotal * fatShare) / KCAL_PER_G.fat);
+  let carbBasis = '';
+  let carbsG = Math.round(
+    (kcalTotal - proteinG * KCAL_PER_G.protein - fatG * KCAL_PER_G.fat) / KCAL_PER_G.carbs,
+  );
+
+  const carbShare = (carbsG * KCAL_PER_G.carbs) / kcalTotal;
+  if (member.special.includes('insulinResistance') && carbShare > IR_CARB_SHARE_CAP) {
+    // 超了就压到上限，省下来的能量**全部给蛋白质**，不给脂肪 —— 把碳水换成脂肪对胰岛素抵抗没有好处。
+    carbsG = Math.round((kcalTotal * IR_CARB_SHARE_CAP) / KCAL_PER_G.carbs);
+    proteinG = Math.round(
+      (kcalTotal - carbsG * KCAL_PER_G.carbs - fatG * KCAL_PER_G.fat) / KCAL_PER_G.protein,
+    );
+    const percent = Math.round(IR_CARB_SHARE_CAP * 100);
+    carbBasis = `碳水上限 ${percent}%（本应用口径）`;
+    notes.push(`碳水按 ${percent}% 的上限控制，省下的能量给了蛋白质（本应用口径）`);
+  }
+
+  return {
+    name: member.name,
+    summary: memberSummaryLabel(member),
+    kcal: kcalTotal,
+    protein: Math.round(proteinG),
+    carbs: carbsG,
+    fat: fatG,
+    fiber: FIBER_G,
+    kcalBasis: basisOf([`依据 ${sourceLabel(band.source, band.todo)}`, goal.kcalNote, pregnancyKcalNote]),
+    proteinBasis: basisOf([
+      `依据 ${sourceLabel(proteinBand.source, proteinBand.todo)}`,
+      goal.proteinNote,
+      pregnancyProteinNote,
+    ]),
+    carbBasis,
+    notes,
+  };
+}
+
+/**
+ * 全家一天的食物类别目标 = 逐位成员按各自宝塔取值再相加。
+ *
+ * 「深色蔬菜占一半」「每周水产 2 次」这类只进 `note`，不参与核算 —— 本应用没有菜谱的类别实测值
+ * （食材分类里 `egg` 一个类目同时装蛋和奶），算不了，所以本轮只做目标展示与提示词（用户明确的选择）。
+ */
+function foodGroupsFor(members: Member[]): FoodGroupTarget[] {
+  const merged = new Map<FoodGroupKey, FoodGroupTarget & { sources: Set<string> }>();
+
+  for (const member of members) {
+    const { groups } = pagodaFor(member.age);
+    for (const group of groups) {
+      let target = merged.get(group.key);
+      if (!target) {
+        target = {
+          key: group.key,
+          label: group.label,
+          min: 0,
+          max: group.max === null ? null : 0,
+          unit: group.unit,
+          note: group.note,
+          basis: '',
+          sources: new Set<string>(),
+        };
+        merged.set(group.key, target);
+      }
+      target.sources.add(SOURCES[group.source].short);
+      if (group.todo) target.todo ??= group.todo;
+      // 这一位成员的这一层没有具体克数（如老年人宝塔的谷类）：**不参与相加** —— 加 0 不改结果，
+      // 却会让「全家合计」看起来像算过了。`todo` 已经记下，卡片上显示「（待核实）」。
+      if (group.min === 0 && group.max === null) continue;
+      target.min += group.min;
+      if (group.max !== null && target.max !== null) target.max += group.max;
+    }
+  }
+
+  return (
+    [...merged.values()]
+      .map(({ sources, ...target }) => ({
+        ...target,
+        // 一位成员的宝塔只有一张；跨了年龄段（比如一家有老人和小孩）就如实说是分别取的。
+        basis:
+          sources.size === 1
+            ? [...sources][0]
+            : `按各成员年龄段分别取宝塔（${[...sources].join('、')}）`,
+      }))
+      // 整层既没有数值也没有可说的（一位成员都没有的兜底路径会走到这里）：不留空行。
+      .filter((target) => !(target.min === 0 && target.max === null && !target.todo))
+  );
 }
 
 /**
  * 全家的全天营养目标 = 逐位成员相加。没有成员时按一位均衡成人算，与 `householdPortions` 同一约定。
  *
- * 注意口径：每位成员的目标里带着**自己的**体重方向系数，而菜单里的菜只按 `portionFactor` 线性放大
- * （只有另配主食带目标系数，见 `staples`）。所以减脂家庭的「实际」会系统性高于目标 —— 那是真的
- * 信号（菜单确实偏多），不是 bug，界面上那是「参考」小字的用处。
+ * 注意两处口径差，它们会造成「实际高于目标」的观感，都是真的信号而不是 bug：
+ * - 每位成员的目标带着**自己的**体重方向增减，而菜单里的菜只按 `portionFactor` 线性放大（只有另配
+ *   主食带目标系数，见 `staples`）。
+ * - 食物类别目标是**全家一天**的量，而卡片上的达成率来自「今天这份菜单」，两者不是一回事。
  */
 export function nutritionTarget(profile: Profile): NutritionTarget {
   const members = profile.members.length > 0 ? profile.members : [DEFAULT_MEMBER];
-  const perMember = members.map((member) => ({ member, macros: memberTarget(member) }));
+  const perMember = members.map((member) => memberTarget(member));
+  const sum = (pick: (target: MemberTarget) => number) =>
+    perMember.reduce((total, target) => total + pick(target), 0);
+  const foodGroups = foodGroupsFor(members);
   return {
-    kcal: perMember.reduce((sum, item) => sum + item.macros.kcal, 0),
-    protein: perMember.reduce((sum, item) => sum + item.macros.protein, 0),
-    carbs: perMember.reduce((sum, item) => sum + item.macros.carbs, 0),
-    fat: perMember.reduce((sum, item) => sum + item.macros.fat, 0),
-    fiber: perMember.reduce((sum, item) => sum + item.macros.fiber, 0),
-    members: perMember.map(({ member, macros }) => ({
-      name: member.name,
-      kcal: macros.kcal,
-      protein: macros.protein,
-    })),
+    kcal: sum((target) => target.kcal),
+    protein: sum((target) => target.protein),
+    carbs: sum((target) => target.carbs),
+    fat: sum((target) => target.fat),
+    fiber: sum((target) => target.fiber),
+    members: perMember,
+    foodGroups,
+    foodGroupsBasis: foodGroupBasis(foodGroups),
   };
 }
 

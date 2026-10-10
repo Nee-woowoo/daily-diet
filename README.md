@@ -1,56 +1,38 @@
-# Welcome to your Expo app 👋
+# 每日饮食 · Daily Diet
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+一个帮中国家庭回答「今天吃什么」的 AI 配餐 App。
 
-## Get started
+输入家庭成员的健康档案和家里的食材库存，它会综合每个人的身体目标、特殊状态（孕期 / 发育期儿童 / 痛风等代谢疾病）与饮食偏好，生成一日三餐的完整搭配——精确到食材克数、调味料用量、烹饪步骤，并自动汇总缺口食材生成购物清单。
 
-1. Install dependencies
+## 功能特性
 
-   ```bash
-   npm install
-   ```
+- **家庭成员画像**：每位成员独立的年龄、体重方向（减脂 / 增肌 / 均衡）与特殊状态（孕期、发育期儿童、痛风、胰岛素抵抗、高血压等），硬禁忌逐菜排除
+- **AI 智能菜单**：接入 DeepSeek 大模型生成三餐搭配（一荤一素一汤式组合），支持中西日式菜系；未配置 API Key 时自动回退到内置菜谱规则引擎
+- **营养目标量化**：依据《中国居民膳食指南（2022）》与《中国居民膳食营养素参考摄入量（2023 版）》，按成员计算每日热量与宏量营养素目标，并跟踪菜单达成度
+- **食库管理**：记录家中食材库存（肉禽水产 / 蔬菜 / 蛋奶 / 水果 / 主食 / 调味 / 干货等分类），菜单优先利用现有食材
+- **购物清单**：菜单缺口食材自动汇总，勾选采购后可一键入食库
+- **时令食俗**：传统节日与节气当天推荐对应食俗菜品（冬至饺子、腊八腊八粥等）
+- **本地存储**：全部数据保存在设备本地（AsyncStorage），不上传服务器
 
-2. Start the app
+## 技术栈
 
-   ```bash
-   npx expo start
-   ```
+Expo SDK 57 · React Native 0.86 · TypeScript · expo-router（文件路由）· AsyncStorage · DeepSeek API（OpenAI 兼容）
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## 快速开始
 
 ```bash
-npm run reset-project
+npm install
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+用手机 Expo Go 扫码即可预览（开发模式）。
 
-### Other setup steps
+AI 菜单为可选功能：在 App「我的 → AI 设置」中填入你自己的 DeepSeek API Key 即可启用；不填则使用内置规则引擎。
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+## 免责声明
 
-## Learn more
+本 App 的菜单与营养建议仅供参考，不能替代医生或注册营养师的专业意见。特殊疾病（孕期并发症、痛风急性期、糖尿病等）请遵医嘱。
 
-To learn more about developing your project with Expo, look at the following resources:
+## 许可
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+[MIT](LICENSE)
